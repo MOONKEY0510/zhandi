@@ -1,0 +1,1 @@
+export { AssetOptimizer } from './AssetOptimizer';
