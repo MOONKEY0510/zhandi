@@ -224,10 +224,10 @@ export class GameScene {
 
     this.settingsMenu.onApply = (settings: GameSettings) => {
       this.applySettings(settings);
-      this.settingsMenu.hide();
+      this.resumeFromSettings();
     };
     this.settingsMenu.onCancel = () => {
-      this.settingsMenu.hide();
+      this.resumeFromSettings();
     };
 
     this.stateMachine.transition(GameState.MENU);
@@ -431,8 +431,17 @@ export class GameScene {
     });
   }
 
+  private resumeFromSettings(): void {
+    this.settingsMenu.hide();
+    if (this.stateMachine.is(GameState.PAUSED)) {
+      this.stateMachine.transition(GameState.PLAYING);
+      this.simulationClock.reset(performance.now());
+      this.inputManager.requestPointerLock();
+    }
+  }
+
   private applySettings(settings: GameSettings): void {
-    this.audioSystem.setVolume(settings.volume / 100);
+    this.audioSystem?.setVolume(settings.volume / 100);
     // 灵敏度和画质可以在此应用
     if (settings.graphics === 'low') {
       this.renderer.setPixelRatio(1);
@@ -441,7 +450,6 @@ export class GameScene {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       this.renderer.shadowMap.enabled = true;
     }
-    this.inputManager.requestPointerLock();
   }
 
   private setupDeathOverlay(): void {
@@ -1488,9 +1496,9 @@ export class GameScene {
     // 玩家更新
     if (this.player && !this.healthSystem.isDead && !this.inVehicle) {
       this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
-      this.pendingMouseMovement.x = 0;
-      this.pendingMouseMovement.y = 0;
     }
+    this.pendingMouseMovement.x = 0;
+    this.pendingMouseMovement.y = 0;
 
     // 载具控制
     this.updateVehicleControl(dt);
