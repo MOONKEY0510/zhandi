@@ -28,6 +28,16 @@ describe('PhysicsWorld', () => {
     expect(ground.slopeAngle).toBeCloseTo(0);
   });
 
+  it('resizes the player capsule for crouch transitions', () => {
+    const physics = new PhysicsWorld();
+    physics.createGround(120);
+    physics.createCapsule('player', 0.4, 0.45, { x: 0, y: 0.85, z: 0 }, 70);
+
+    physics.resizeCapsule('player', 0.4, 0.1);
+
+    expect(physics.bodies.get('player')?.collider.halfHeight()).toBeCloseTo(0.1);
+  });
+
   it('reports no ground when the capsule is airborne', () => {
     const physics = new PhysicsWorld();
     physics.createGround(120);

@@ -58,6 +58,29 @@ export class PhysicsWorld {
     this.world.step();
   }
 
+  resizeCapsule(id: string, radius: number, halfHeight: number): void {
+    const body = this.bodies.get(id);
+    if (!body) return;
+    body.collider.setShape(new RAPIER.Capsule(halfHeight, radius));
+  }
+
+  canResizeCapsule(id: string, radius: number, halfHeight: number, centerOffsetY: number): boolean {
+    const body = this.bodies.get(id);
+    if (!body) return false;
+    this.world.propagateModifiedBodyPositionsToColliders();
+    const position = body.rigidBody.translation();
+    const hit = this.world.intersectionWithShape(
+      new RAPIER.Vector3(position.x, position.y + centerOffsetY, position.z),
+      new RAPIER.Quaternion(0, 0, 0, 1),
+      new RAPIER.Capsule(halfHeight, radius),
+      undefined,
+      undefined,
+      body.collider,
+      body.rigidBody,
+    );
+    return hit === null;
+  }
+
   probeGround(id: string, maxDistance: number, maxSlopeAngle: number): GroundProbe {
     const body = this.bodies.get(id);
     if (!body) {

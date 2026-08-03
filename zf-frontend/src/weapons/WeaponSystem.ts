@@ -13,6 +13,20 @@ export enum FireMode {
   BURST = 'burst',
 }
 
+export type WeaponAction =
+  | 'fire'
+  | 'dry_fire'
+  | 'reload_start'
+  | 'reload_complete'
+  | 'bolt_cycle_start'
+  | 'bolt_ready';
+
+export interface WeaponActionEvent {
+  action: WeaponAction;
+  weaponType: WeaponType;
+  time: number;
+}
+
 export interface WeaponConfig {
   name: string;
   type: WeaponType;
@@ -130,6 +144,8 @@ export class Weapon {
   burstResetTimer: number = 0;
   shotsInBurst: number = 0;
   boltReadyTime: number = 0;
+  onAction: ((event: WeaponActionEvent) => void) | null = null;
+  private boltReadyEmitted = true;
 
   constructor(type: WeaponType) {
     this.config = WEAPON_CONFIGS[type];
@@ -146,11 +162,19 @@ export class Weapon {
   }
 
   fire(currentTime: number): boolean {
-    if (!this.canFire(currentTime)) return false;
+    if (!this.canFire(currentTime)) {
+      if (this.currentAmmo <= 0) this.emitAction('dry_fire', currentTime);
+      return false;
+    }
     this.currentAmmo--;
     this.lastFireTime = currentTime;
     this.shotsInBurst++;
-    if (this.config.boltActionTime) this.boltReadyTime = currentTime + this.config.boltActionTime * 1000;
+    this.emitAction('fire', currentTime);
+    if (this.config.boltActionTime) {
+      this.boltReadyTime = currentTime + this.config.boltActionTime * 1000;
+      this.boltReadyEmitted = false;
+      this.emitAction('bolt_cycle_start', currentTime);
+    }
     return true;
   }
 
@@ -161,6 +185,7 @@ export class Weapon {
 
     this.isReloading = true;
     this.reloadStartTime = currentTime;
+    this.emitAction('reload_start', currentTime);
     return true;
   }
 
@@ -174,6 +199,7 @@ export class Weapon {
       this.currentAmmo += ammoToLoad;
       this.reserveAmmo -= ammoToLoad;
       this.isReloading = false;
+      this.emitAction('reload_complete', currentTime);
       return true;
     }
     return false;
@@ -182,6 +208,14 @@ export class Weapon {
   getReloadProgress(currentTime: number): number {
     if (!this.isReloading) return 0;
     return Math.min(1, (currentTime - this.reloadStartTime) / (this.config.reloadTime * 1000));
+  }
+
+  update(currentTime: number): void {
+    this.updateReload(currentTime);
+    if (!this.boltReadyEmitted && currentTime >= this.boltReadyTime) {
+      this.boltReadyEmitted = true;
+      this.emitAction('bolt_ready', currentTime);
+    }
   }
 
   getRecoilMultiplier(currentTime: number): number {
@@ -193,6 +227,10 @@ export class Weapon {
   getSpreadMultiplier(moving: boolean, crouching: boolean): number {
     if (crouching) return this.config.crouchSpreadMultiplier;
     return moving ? this.config.movingSpreadMultiplier : 1;
+  }
+
+  private emitAction(action: WeaponAction, time: number): void {
+    this.onAction?.({ action, weaponType: this.config.type, time });
   }
 }
 
@@ -227,6 +265,6 @@ export class WeaponSystem {
   }
 
   update(currentTime: number): void {
-    this.getCurrentWeapon().updateReload(currentTime);
+    this.getCurrentWeapon().update(currentTime);
   }
 }

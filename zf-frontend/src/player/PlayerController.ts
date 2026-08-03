@@ -184,7 +184,28 @@ export class PlayerController {
   }
 
   private updateCrouch(input: InputState, dt: number): void {
-    this.isCrouching = input.crouch;
+    let wantsCrouch = input.crouch;
+    if (!wantsCrouch && this.isCrouching) {
+      const standingHalfHeight = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
+      const centerOffset = (PLAYER_HEIGHT - CROUCH_HEIGHT) / 2;
+      wantsCrouch = !this.physicsWorld.canResizeCapsule(
+        this.bodyId,
+        PLAYER_RADIUS,
+        standingHalfHeight,
+        centerOffset,
+      );
+    }
+
+    if (wantsCrouch !== this.isCrouching) {
+      this.isCrouching = wantsCrouch;
+      const colliderHeight = this.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
+      this.physicsWorld.resizeCapsule(
+        this.bodyId,
+        PLAYER_RADIUS,
+        colliderHeight / 2 - PLAYER_RADIUS,
+      );
+    }
+
     const targetHeight = this.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
     this.currentHeight += (targetHeight - this.currentHeight) * Math.min(1, 10 * dt);
   }
