@@ -371,7 +371,7 @@ export class GameScene {
     this.gameMode = new GameMode(GameModeType.TDM);
     this.gameMode.teams.set('A', { id: 'A', name: '德军', color: '#ff4444', score: 0, players: [] });
     this.gameMode.teams.set('B', { id: 'B', name: '苏军', color: '#4488ff', score: 0, players: [] });
-    this.gameMode.addPlayer(this.playerId, '玩家', 'A');
+    this.gameMode.addPlayer(this.playerId, '玩家', 'B');
     this.gameMode.start();
 
     // 成就

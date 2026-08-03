@@ -37,7 +37,14 @@ export class ConquestPresenter {
 
   getHudState(): {
     tickets: { axis: number; allies: number };
-    controlPoints: { id: string; owner: string; progress: number }[];
+    controlPoints: {
+      id: string;
+      owner: string;
+      progress: number;
+      contested: boolean;
+      axisCount: number;
+      alliesCount: number;
+    }[];
   } {
     return {
       tickets: this.mode.getTickets(),

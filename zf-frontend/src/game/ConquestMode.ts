@@ -25,6 +25,17 @@ export interface ControlPoint {
   captureProgress: number; // -100 到 100，正=盟军，负=轴心
   capturingTeam: TeamId | null;
   captureSpeed: number;
+  contested: boolean;
+  axisCount: number;
+  alliesCount: number;
+}
+
+export type TicketDrainSource = 'death' | 'objective' | 'vehicle';
+
+export interface TicketEvent {
+  team: TeamId;
+  amount: number;
+  source: TicketDrainSource;
 }
 
 export interface ConquestConfig {
@@ -53,6 +64,7 @@ export class ConquestMode {
   isGameOver = false;
   winner: TeamId | null = null;
   gameTime = 0;
+  onTicketEvent: ((event: TicketEvent) => void) | null = null;
 
   constructor(config: Partial<ConquestConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -89,16 +101,19 @@ export class ConquestMode {
         id: 'A', name: '据点 A', position: new THREE.Vector3(0, 0, -30),
         radius: this.config.captureRadius, owner: TeamId.NEUTRAL,
         captureProgress: 0, capturingTeam: null, captureSpeed: this.config.captureSpeed,
+        contested: false, axisCount: 0, alliesCount: 0,
       },
       {
         id: 'B', name: '据点 B', position: new THREE.Vector3(0, 0, 0),
         radius: this.config.captureRadius, owner: TeamId.NEUTRAL,
         captureProgress: 0, capturingTeam: null, captureSpeed: this.config.captureSpeed,
+        contested: false, axisCount: 0, alliesCount: 0,
       },
       {
         id: 'C', name: '据点 C', position: new THREE.Vector3(0, 0, 30),
         radius: this.config.captureRadius, owner: TeamId.NEUTRAL,
         captureProgress: 0, capturingTeam: null, captureSpeed: this.config.captureSpeed,
+        contested: false, axisCount: 0, alliesCount: 0,
       },
     ];
   }
@@ -135,6 +150,10 @@ export class ConquestMode {
       }
     }
 
+    point.axisCount = axisCount;
+    point.alliesCount = alliesCount;
+    point.contested = axisCount > 0 && alliesCount > 0;
+
     // 确定当前占领方
     let capturingTeam: TeamId | null = null;
     let captureStrength = 0;
@@ -150,6 +169,7 @@ export class ConquestMode {
     point.capturingTeam = capturingTeam;
 
     if (capturingTeam === null) {
+      if (point.contested) return;
       // 无人占领，进度缓慢衰减
       if (point.captureProgress > 0) {
         point.captureProgress = Math.max(0, point.captureProgress - this.config.captureDecaySpeed * dt);
@@ -192,22 +212,36 @@ export class ConquestMode {
     }
 
     // 据点少的一方流失兵力值
-    const axisTeam = this.teams.get(TeamId.AXIS)!;
-    const alliesTeam = this.teams.get(TeamId.ALLIES)!;
-
     if (axisPoints < alliesPoints) {
-      axisTeam.tickets = Math.max(0, axisTeam.tickets - this.config.ticketDrainPerSecond * (alliesPoints - axisPoints) * dt);
+      this.drainTickets(
+        TeamId.AXIS,
+        this.config.ticketDrainPerSecond * (alliesPoints - axisPoints) * dt,
+        'objective',
+      );
     } else if (alliesPoints < axisPoints) {
-      alliesTeam.tickets = Math.max(0, alliesTeam.tickets - this.config.ticketDrainPerSecond * (axisPoints - alliesPoints) * dt);
+      this.drainTickets(
+        TeamId.ALLIES,
+        this.config.ticketDrainPerSecond * (axisPoints - alliesPoints) * dt,
+        'objective',
+      );
     }
   }
 
   // 玩家死亡扣兵力值
   onPlayerDeath(team: TeamId): void {
+    this.drainTickets(team, this.config.ticketDrainPerDeath, 'death');
+  }
+
+  onVehicleDestroyed(team: TeamId, ticketCost: number): void {
+    this.drainTickets(team, ticketCost, 'vehicle');
+  }
+
+  drainTickets(team: TeamId, amount: number, source: TicketDrainSource): void {
     const teamInfo = this.teams.get(team);
-    if (teamInfo) {
-      teamInfo.tickets = Math.max(0, teamInfo.tickets - this.config.ticketDrainPerDeath);
-    }
+    if (!teamInfo || amount <= 0) return;
+    const drained = Math.min(teamInfo.tickets, amount);
+    teamInfo.tickets -= drained;
+    this.onTicketEvent?.({ team, amount: drained, source });
   }
 
   // AI 死亡扣兵力值
@@ -235,11 +269,21 @@ export class ConquestMode {
   }
 
   // 获取据点状态（用于 HUD）
-  getControlPointStatus(): { id: string; owner: TeamId; progress: number }[] {
+  getControlPointStatus(): {
+    id: string;
+    owner: TeamId;
+    progress: number;
+    contested: boolean;
+    axisCount: number;
+    alliesCount: number;
+  }[] {
     return this.controlPoints.map(p => ({
       id: p.id,
       owner: p.owner,
       progress: p.captureProgress,
+      contested: p.contested,
+      axisCount: p.axisCount,
+      alliesCount: p.alliesCount,
     }));
   }
 
