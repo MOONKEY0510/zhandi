@@ -18,8 +18,22 @@ export class HealthSystem {
   deathTime: number = 0;
   canRevive: boolean = true;
 
+  // 重生保护
+  spawnProtectionDuration: number = 3000; // 3秒无敌
+  spawnProtectionEndTime: number = 0;
+  isSpawnProtected: boolean = false;
+
   takeDamage(amount: number, currentTime: number): boolean {
     if (this.isDead) return false;
+
+    // 重生保护期间无敌
+    if (this.isSpawnProtected) {
+      if (currentTime < this.spawnProtectionEndTime) {
+        return false;
+      } else {
+        this.isSpawnProtected = false;
+      }
+    }
 
     this.currentHealth = Math.max(0, this.currentHealth - amount);
     this.lastDamageTime = currentTime;
@@ -60,6 +74,15 @@ export class HealthSystem {
     this.isDead = false;
     this.currentHealth = this.maxHealth;
     this.lastDamageTime = 0;
+    // 激活重生保护
+    this.isSpawnProtected = true;
+    this.spawnProtectionEndTime = performance.now() + this.spawnProtectionDuration;
+  }
+
+  // 获取重生保护剩余时间（秒）
+  getSpawnProtectionRemaining(currentTime: number): number {
+    if (!this.isSpawnProtected) return 0;
+    return Math.max(0, (this.spawnProtectionEndTime - currentTime) / 1000);
   }
 
   getHealthState(): HealthState {

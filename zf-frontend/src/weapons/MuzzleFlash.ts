@@ -32,11 +32,13 @@ export class MuzzleFlash {
   trigger(currentTime: number): void {
     this.isActive = true;
     this.startTime = currentTime;
-    this.flashLight.intensity = 3;
+    this.flashLight.intensity = 5;
     (this.flashMesh.material as THREE.MeshBasicMaterial).opacity = 1;
 
-    const scale = 0.8 + Math.random() * 0.4;
+    // 随机旋转 + 随机缩放，火焰更有冲击感
+    const scale = 0.9 + Math.random() * 0.6;
     this.flashMesh.scale.set(scale, scale, scale);
+    this.flashMesh.rotation.z = Math.random() * Math.PI;
   }
 
   update(currentTime: number): void {
@@ -50,8 +52,10 @@ export class MuzzleFlash {
       return;
     }
 
-    const fade = 1 - elapsed / this.duration;
-    this.flashLight.intensity = 3 * fade;
+    // 二次衰减曲线，爆闪后快速熄灭
+    const t = elapsed / this.duration;
+    const fade = (1 - t) * (1 - t);
+    this.flashLight.intensity = 6 * fade;
     (this.flashMesh.material as THREE.MeshBasicMaterial).opacity = fade;
   }
 }

@@ -123,25 +123,121 @@ export class AudioSystem {
   async init(): Promise<void> {
     try {
       this.audioContext = new AudioContext();
-      await this.loadSounds();
+      this.generateSounds();
     } catch (error) {
       console.warn('Audio initialization failed:', error);
     }
   }
 
-  async loadSounds(): Promise<void> {
-    const promises = Object.values(SOUND_CONFIGS).map(async (config) => {
-      try {
-        const response = await fetch(config.url);
-        const arrayBuffer = await response.arrayBuffer();
-        const audioBuffer = await this.audioContext!.decodeAudioData(arrayBuffer);
-        this.sounds.set(config.type, audioBuffer);
-      } catch (error) {
-        console.warn(`Failed to load sound: ${config.url}`, error);
-      }
-    });
+  // 使用 WebAudio 合成音效，无需外部音频文件
+  private generateSounds(): void {
+    if (!this.audioContext) return;
 
-    await Promise.all(promises);
+    // 枪声：短促的噪声脉冲 + 低频
+    this.sounds.set(SoundType.GUNSHOT, this.createNoiseBurst(0.15, 800, 0.8));
+    // 换弹：两个短促点击
+    this.sounds.set(SoundType.RELOAD, this.createClickSound(0.3, 200));
+    // 脚步：低频短噪声
+    this.sounds.set(SoundType.FOOTSTEP, this.createNoiseBurst(0.05, 150, 0.3));
+    // 爆炸：长噪声 + 低频
+    this.sounds.set(SoundType.EXPLOSION, this.createNoiseBurst(0.8, 200, 1.0));
+    // 命中：中频短音
+    this.sounds.set(SoundType.HIT, this.createTone(0.08, 600, 0.5));
+    // 死亡：下降音调
+    this.sounds.set(SoundType.DEATH, this.createSweepTone(0.5, 400, 80, 0.7));
+    // 环境音：低频持续噪声
+    this.sounds.set(SoundType.AMBIENT, this.createAmbient());
+    // UI 点击
+    this.sounds.set(SoundType.UI_CLICK, this.createTone(0.05, 800, 0.4));
+    // UI 悬停
+    this.sounds.set(SoundType.UI_HOVER, this.createTone(0.03, 1200, 0.2));
+  }
+
+  private createNoiseBurst(duration: number, filterFreq: number, volume: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      const envelope = Math.pow(1 - i / length, 2);
+      data[i] = (Math.random() * 2 - 1) * envelope * volume;
+    }
+
+    return buffer;
+  }
+
+  private createTone(duration: number, freq: number, volume: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const envelope = Math.pow(1 - i / length, 1.5);
+      data[i] = Math.sin(2 * Math.PI * freq * t) * envelope * volume;
+    }
+
+    return buffer;
+  }
+
+  private createSweepTone(duration: number, startFreq: number, endFreq: number, volume: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const progress = i / length;
+      const freq = startFreq + (endFreq - startFreq) * progress;
+      const envelope = Math.pow(1 - progress, 1.5);
+      data[i] = Math.sin(2 * Math.PI * freq * t) * envelope * volume;
+    }
+
+    return buffer;
+  }
+
+  private createClickSound(duration: number, freq: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const envelope = Math.pow(1 - i / length, 3);
+      // 两个点击声
+      let sample = 0;
+      if (i < length * 0.3) {
+        sample = Math.sin(2 * Math.PI * freq * t) * envelope;
+      } else if (i > length * 0.4 && i < length * 0.7) {
+        sample = Math.sin(2 * Math.PI * freq * 1.2 * t) * envelope * 0.8;
+      }
+      data[i] = sample * 0.5;
+    }
+
+    return buffer;
+  }
+
+  private createAmbient(): AudioBuffer {
+    const ctx = this.audioContext!;
+    const duration = 3;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      data[i] = (Math.random() * 2 - 1) * 0.05;
+    }
+
+    return buffer;
   }
 
   play(type: SoundType, position?: { x: number; y: number; z: number }): string | null {
@@ -155,8 +251,17 @@ export class AudioSystem {
     source.buffer = buffer;
     source.loop = config.loop;
 
+    // 每枪随机化音高，避免机械重复感
+    if (type === SoundType.GUNSHOT) {
+      source.detune.value = (Math.random() - 0.5) * 300;
+    }
+
     const gainNode = this.audioContext.createGain();
-    gainNode.gain.value = config.volume * this.masterVolume;
+    // 枪声/命中音加随机音量，增强打击感
+    const volumeRand = (type === SoundType.GUNSHOT || type === SoundType.HIT)
+      ? 0.85 + Math.random() * 0.3
+      : 1;
+    gainNode.gain.value = config.volume * this.masterVolume * volumeRand;
 
     if (config.spatial && position) {
       const panner = this.createPanner(config, position);

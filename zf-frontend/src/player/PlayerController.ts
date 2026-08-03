@@ -3,14 +3,37 @@ import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { InputState } from '../input/InputManager';
 
 const PLAYER_HEIGHT = 1.7;
+const CROUCH_HEIGHT = 1.0;
 const PLAYER_RADIUS = 0.4;
 const WALK_SPEED = 5.0;
 const SPRINT_SPEED = 8.0;
 const CROUCH_SPEED = 2.5;
 const JUMP_FORCE = 7.0;
-const GROUND_FRICTION = 0.9;
+const GROUND_FRICTION = 0.85;
 const AIR_CONTROL = 0.3;
 const MOUSE_SENSITIVITY = 0.002;
+const ACCELERATION = 12.0;
+
+// 体力系统
+const MAX_STAMINA = 100;
+const STAMINA_DRAIN_RATE = 25;
+const STAMINA_REGEN_RATE = 15;
+const STAMINA_MIN_TO_SPRINT = 20;
+
+// 坠落伤害
+const FALL_DAMAGE_THRESHOLD = 8;
+const FALL_DAMAGE_MULTIPLIER = 5;
+
+// 头部摆动
+const BOB_FREQUENCY = 10;
+const BOB_AMPLITUDE_X = 0.03;
+const BOB_AMPLITUDE_Y = 0.05;
+
+// FOV
+const BASE_FOV = 75;
+const SPRINT_FOV = 85;
+const ADS_FOV = 55;
+const FOV_LERP_SPEED = 8;
 
 export class PlayerController {
   private physicsWorld: PhysicsWorld;
@@ -20,6 +43,32 @@ export class PlayerController {
   private pitch = 0;
   private isGrounded = false;
   private wasJumpPressed = false;
+  private prevVelocityY = 0;
+
+  // 体力
+  stamina = MAX_STAMINA;
+  private isSprinting = false;
+
+  // 屏幕震动
+  private shakeAmount = 0;
+  private shakeDecay = 0;
+
+  // 头部摆动
+  private bobPhase = 0;
+  private bobIntensity = 0;
+
+  // 蹲下
+  private isCrouching = false;
+  private currentHeight = PLAYER_HEIGHT;
+
+  // FOV
+  private currentFov = BASE_FOV;
+  private targetFov = BASE_FOV;
+  private isAiming = false;
+
+  // 相机后坐力
+  private cameraRecoilPitch = 0;
+  private cameraRecoilYaw = 0;
 
   constructor(physicsWorld: PhysicsWorld, camera: THREE.PerspectiveCamera) {
     this.physicsWorld = physicsWorld;
@@ -40,7 +89,12 @@ export class PlayerController {
   update(input: InputState, mouseMovement: { x: number; y: number }, dt: number): void {
     this.updateRotation(mouseMovement);
     this.updateMovement(input, dt);
-    this.syncCamera();
+    this.updateStamina(input, dt);
+    this.updateCrouch(input, dt);
+    this.updateBob(input, dt);
+    this.updateFov(dt);
+    this.updateCameraRecoil(dt);
+    this.syncCamera(dt);
   }
 
   private updateRotation(mouseMovement: { x: number; y: number }): void {
@@ -49,16 +103,28 @@ export class PlayerController {
     this.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, this.pitch));
   }
 
-  private updateMovement(input: InputState, _dt: number): void {
+  private updateMovement(input: InputState, dt: number): void {
     const velocity = this.physicsWorld.getBodyLinearVelocity(this.bodyId);
     if (!velocity) return;
 
     const pos = this.physicsWorld.getBodyPosition(this.bodyId);
     if (!pos) return;
 
-    this.isGrounded = pos.y <= PLAYER_HEIGHT / 2 + 0.05;
+    const wasGrounded = this.isGrounded;
+    this.isGrounded = pos.y <= this.currentHeight / 2 + 0.05;
 
-    const speed = input.sprint ? SPRINT_SPEED : input.crouch ? CROUCH_SPEED : WALK_SPEED;
+    // 坠落伤害检测
+    if (!wasGrounded && this.isGrounded && this.prevVelocityY < -FALL_DAMAGE_THRESHOLD) {
+      const fallDamage = (-this.prevVelocityY - FALL_DAMAGE_THRESHOLD) * FALL_DAMAGE_MULTIPLIER;
+      this.onFallDamage?.(fallDamage);
+    }
+    this.prevVelocityY = velocity.y;
+
+    // 冲刺需要体力
+    const canSprint = input.sprint && this.stamina > STAMINA_MIN_TO_SPRINT && !input.crouch;
+    this.isSprinting = canSprint && (input.forward || input.backward);
+
+    const speed = this.isSprinting ? SPRINT_SPEED : input.crouch ? CROUCH_SPEED : WALK_SPEED;
     const controlFactor = this.isGrounded ? 1.0 : AIR_CONTROL;
 
     const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
@@ -75,8 +141,10 @@ export class PlayerController {
       targetVel.normalize().multiplyScalar(speed * controlFactor);
     }
 
-    const newVelX = velocity.x * GROUND_FRICTION + targetVel.x * (1 - GROUND_FRICTION);
-    const newVelZ = velocity.z * GROUND_FRICTION + targetVel.z * (1 - GROUND_FRICTION);
+    // 平滑加速（替代简单摩擦混合）
+    const accel = this.isGrounded ? ACCELERATION : ACCELERATION * AIR_CONTROL;
+    const newVelX = velocity.x + (targetVel.x - velocity.x) * Math.min(1, accel * dt);
+    const newVelZ = velocity.z + (targetVel.z - velocity.z) * Math.min(1, accel * dt);
 
     let newVelY = velocity.y;
     if (input.jump && this.isGrounded && !this.wasJumpPressed) {
@@ -92,16 +160,114 @@ export class PlayerController {
     });
   }
 
-  private syncCamera(): void {
+  private updateStamina(input: InputState, dt: number): void {
+    if (this.isSprinting) {
+      this.stamina = Math.max(0, this.stamina - STAMINA_DRAIN_RATE * dt);
+    } else {
+      this.stamina = Math.min(MAX_STAMINA, this.stamina + STAMINA_REGEN_RATE * dt);
+    }
+  }
+
+  private updateCrouch(input: InputState, dt: number): void {
+    this.isCrouching = input.crouch;
+    const targetHeight = this.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
+    this.currentHeight += (targetHeight - this.currentHeight) * Math.min(1, 10 * dt);
+  }
+
+  private updateBob(input: InputState, dt: number): void {
+    const isMoving = input.forward || input.backward || input.left || input.right;
+    const speedFactor = this.isSprinting ? 1.5 : this.isCrouching ? 0.5 : 1.0;
+
+    if (isMoving && this.isGrounded) {
+      this.bobPhase += dt * BOB_FREQUENCY * speedFactor;
+      this.bobIntensity = Math.min(1, this.bobIntensity + dt * 5);
+    } else {
+      this.bobIntensity = Math.max(0, this.bobIntensity - dt * 5);
+    }
+  }
+
+  private updateFov(dt: number): void {
+    // ADS 优先级最高，其次是冲刺
+    if (this.isAiming) {
+      this.targetFov = ADS_FOV;
+    } else if (this.isSprinting) {
+      this.targetFov = SPRINT_FOV;
+    } else {
+      this.targetFov = BASE_FOV;
+    }
+    this.currentFov += (this.targetFov - this.currentFov) * Math.min(1, FOV_LERP_SPEED * dt);
+    this.camera.fov = this.currentFov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  // 设置瞄准状态（由 GameScene 调用）
+  setAiming(aiming: boolean): void {
+    this.isAiming = aiming;
+  }
+
+  private updateCameraRecoil(dt: number): void {
+    // 相机后坐力恢复
+    this.cameraRecoilPitch *= Math.max(0, 1 - 8 * dt);
+    this.cameraRecoilYaw *= Math.max(0, 1 - 8 * dt);
+  }
+
+  // 添加相机后坐力（射击时调用）
+  addCameraRecoil(pitchAmount: number, yawAmount: number): void {
+    this.cameraRecoilPitch += pitchAmount;
+    this.cameraRecoilYaw += (Math.random() - 0.5) * yawAmount;
+  }
+
+  private syncCamera(dt: number): void {
     const pos = this.physicsWorld.getBodyPosition(this.bodyId);
     if (!pos) return;
 
-    const eyeHeight = PLAYER_HEIGHT - 0.1;
-    this.camera.position.set(pos.x, pos.y + eyeHeight - (PLAYER_HEIGHT / 2), pos.z);
+    const eyeHeight = this.currentHeight - 0.1;
+    let camX = pos.x;
+    let camY = pos.y + eyeHeight - (this.currentHeight / 2);
+    let camZ = pos.z;
+
+    // 头部摆动
+    if (this.bobIntensity > 0) {
+      const bobX = Math.sin(this.bobPhase) * BOB_AMPLITUDE_X * this.bobIntensity;
+      const bobY = Math.abs(Math.cos(this.bobPhase)) * BOB_AMPLITUDE_Y * this.bobIntensity;
+      camX += bobX * Math.cos(this.yaw) - bobY * Math.sin(this.yaw) * 0.3;
+      camY += bobY;
+      camZ += bobX * Math.sin(this.yaw) + bobY * Math.cos(this.yaw) * 0.3;
+    }
+
+    // 屏幕震动
+    if (this.shakeAmount > 0) {
+      camX += (Math.random() - 0.5) * this.shakeAmount;
+      camY += (Math.random() - 0.5) * this.shakeAmount;
+      camZ += (Math.random() - 0.5) * this.shakeAmount;
+      this.shakeAmount = Math.max(0, this.shakeAmount - this.shakeDecay * dt);
+    }
+
+    this.camera.position.set(camX, camY, camZ);
     this.camera.rotation.order = 'YXZ';
-    this.camera.rotation.y = this.yaw;
-    this.camera.rotation.x = this.pitch;
+    this.camera.rotation.y = this.yaw + this.cameraRecoilYaw;
+    this.camera.rotation.x = this.pitch + this.cameraRecoilPitch;
   }
+
+  // 触发屏幕震动
+  addShake(amount: number, decay: number = 5): void {
+    this.shakeAmount = Math.max(this.shakeAmount, amount);
+    this.shakeDecay = decay;
+  }
+
+  // 重置坠落伤害追踪（重生/传送时调用）
+  resetFallState(): void {
+    this.prevVelocityY = 0;
+    this.isGrounded = true;
+    this.shakeAmount = 0;
+    this.bobPhase = 0;
+    this.bobIntensity = 0;
+    this.cameraRecoilPitch = 0;
+    this.cameraRecoilYaw = 0;
+  }
+
+  // 坠落伤害回调
+  onFallDamage?: (damage: number) => void;
 
   getPosition(): { x: number; y: number; z: number } | null {
     return this.physicsWorld.getBodyPosition(this.bodyId);
@@ -109,5 +275,17 @@ export class PlayerController {
 
   getRotation(): { yaw: number; pitch: number } {
     return { yaw: this.yaw, pitch: this.pitch };
+  }
+
+  getStaminaPercentage(): number {
+    return (this.stamina / MAX_STAMINA) * 100;
+  }
+
+  isSprintActive(): boolean {
+    return this.isSprinting;
+  }
+
+  isCrouchActive(): boolean {
+    return this.isCrouching;
   }
 }

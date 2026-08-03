@@ -93,7 +93,7 @@ export class Equipment {
     this.count = this.config.maxCount;
   }
 
-  throw(position: THREE.Vector3, direction: THREE.Vector3): void {
+  throw(position: THREE.Vector3, direction: THREE.Vector3, scene: THREE.Scene, currentTime: number): void {
     if (this.count <= 0) return;
 
     this.count--;
@@ -101,9 +101,12 @@ export class Equipment {
     this.velocity.copy(direction).multiplyScalar(this.config.throwSpeed);
     this.velocity.y += this.config.throwArc * this.config.throwSpeed;
     this.isActive = true;
-    this.activationTime = Date.now();
+    this.activationTime = currentTime;
 
     this.createMesh();
+    if (this.mesh) {
+      scene.add(this.mesh);
+    }
   }
 
   private createMesh(): void {
@@ -133,10 +136,10 @@ export class Equipment {
     }
   }
 
-  update(deltaTime: number, scene: THREE.Scene): boolean {
+  update(deltaTime: number, scene: THREE.Scene, currentTime: number): boolean {
     if (!this.isActive) return false;
 
-    const elapsed = (Date.now() - this.activationTime) / 1000;
+    const elapsed = (currentTime - this.activationTime) / 1000;
 
     if (elapsed < this.config.fuseTime) {
       this.velocity.y -= 9.81 * deltaTime;
@@ -343,19 +346,19 @@ export class EquipmentSystem {
     this.scene = scene;
   }
 
-  throwEquipment(type: EquipmentType, position: THREE.Vector3, direction: THREE.Vector3): Equipment | null {
+  throwEquipment(type: EquipmentType, position: THREE.Vector3, direction: THREE.Vector3, currentTime: number): Equipment | null {
     const equipment = new Equipment(type);
     if (equipment.count > 0) {
-      equipment.throw(position, direction);
+      equipment.throw(position, direction, this.scene, currentTime);
       this.activeEquipment.push(equipment);
       return equipment;
     }
     return null;
   }
 
-  update(deltaTime: number): void {
+  update(deltaTime: number, currentTime: number): void {
     this.activeEquipment = this.activeEquipment.filter(equipment => {
-      return equipment.update(deltaTime, this.scene);
+      return equipment.update(deltaTime, this.scene, currentTime);
     });
   }
 
