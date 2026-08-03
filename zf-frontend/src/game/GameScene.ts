@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { resolveGameConfig, validateGameConfig } from '../config';
+import { loadGameSettings, resolveGameConfig, saveGameSettings, validateGameConfig } from '../config';
 import { EventBus, FixedStepClock, GameState, GameStateMachine } from '../core';
 import { gameplayRandom, useGameplaySeed, useSystemRandom } from '../core/Random';
 import { PerformanceMonitor, PerformancePanel } from '../performance';
@@ -286,6 +286,7 @@ export class GameScene {
 
     // 玩家
     this.player = new PlayerController(this.physicsWorld, this.camera);
+    this.player.applySettings(loadGameSettings());
     this.player.onFallDamage = (damage: number) => {
       const time = this.simulationTimeMs;
       this.player?.addShake(0.1, 5);
@@ -473,12 +474,14 @@ export class GameScene {
   }
 
   private applySettings(settings: GameSettings): void {
-    this.audioSystem?.setVolume(settings.volume / 100);
+    const savedSettings = saveGameSettings(settings);
+    this.audioSystem?.setVolume(savedSettings.volume / 100);
+    this.player?.applySettings(savedSettings);
     // 灵敏度和画质可以在此应用
-    if (settings.graphics === 'low') {
+    if (savedSettings.graphics === 'low') {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
-    } else if (settings.graphics === 'high') {
+    } else if (savedSettings.graphics === 'high') {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       this.renderer.shadowMap.enabled = true;
     }
@@ -985,13 +988,18 @@ export class GameScene {
     if (!this.weaponSystem.fire(currentTime)) return;
 
     this.muzzleFlash.trigger(currentTime);
-    this.weaponView.applyRecoil(config.recoil);
+    this.weaponView.applyRecoil(config.recoil * weapon.getRecoilMultiplier(currentTime));
 
     const origin = this.camera.getWorldPosition(this.tmpVec1);
     const direction = this.tmpVec2;
     this.camera.getWorldDirection(direction);
 
-    const spread = 1 - config.accuracy;
+    const moving = this.inputManager.state.forward || this.inputManager.state.backward ||
+      this.inputManager.state.left || this.inputManager.state.right;
+    const spread = (1 - config.accuracy) * weapon.getSpreadMultiplier(
+      moving,
+      this.player?.isCrouchActive() ?? false,
+    );
     direction.x += (gameplayRandom() - 0.5) * spread * 0.05;
     direction.y += (gameplayRandom() - 0.5) * spread * 0.05;
     direction.normalize();
@@ -1013,7 +1021,14 @@ export class GameScene {
 
   private processHit(
     hitInfo: { point?: THREE.Vector3; distance?: number; target?: THREE.Object3D; isHeadshot?: boolean; bodyPart?: 'head' | 'torso' | 'limb' },
-    config: { damage: number; headshotMultiplier: number; range: number },
+    config: {
+      damage: number;
+      minDamage: number;
+      falloffStart: number;
+      falloffEnd: number;
+      headshotMultiplier: number;
+      range: number;
+    },
     currentTime: number
   ): void {
     let hitBot: AIBot | null = null;
@@ -1036,7 +1051,15 @@ export class GameScene {
 
     const distance = hitInfo.distance || 0;
     const damage = calculateDamage(
-      { baseDamage: config.damage, headshotMultiplier: config.headshotMultiplier, limbMultiplier: 0.7, range: config.range },
+      {
+        baseDamage: config.damage,
+        minDamage: config.minDamage,
+        falloffStart: config.falloffStart,
+        falloffEnd: config.falloffEnd,
+        headshotMultiplier: config.headshotMultiplier,
+        limbMultiplier: 0.7,
+        range: config.range,
+      },
       hitInfo.bodyPart || 'torso', distance
     );
 

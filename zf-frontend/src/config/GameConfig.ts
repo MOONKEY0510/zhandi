@@ -15,6 +15,8 @@ export interface GameConfig {
     airControl: number;
     mouseSensitivity: number;
     acceleration: number;
+    groundProbeDistance: number;
+    maxSlopeAngleDegrees: number;
     maxStamina: number;
     staminaDrainRate: number;
     staminaRegenRate: number;
@@ -74,6 +76,8 @@ export const DEFAULT_GAME_CONFIG: Readonly<GameConfig> = Object.freeze({
     airControl: 0.3,
     mouseSensitivity: 0.002,
     acceleration: 12,
+    groundProbeDistance: 1.05,
+    maxSlopeAngleDegrees: 50,
     maxStamina: 100,
     staminaDrainRate: 25,
     staminaRegenRate: 15,

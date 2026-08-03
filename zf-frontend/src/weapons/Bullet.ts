@@ -62,11 +62,17 @@ export interface DamageInfo {
   headshotMultiplier: number;
   limbMultiplier: number;
   range: number;
+  minDamage?: number;
+  falloffStart?: number;
+  falloffEnd?: number;
 }
 
 export function calculateDamage(info: DamageInfo, bodyPart: 'head' | 'torso' | 'limb', distance: number): number {
-  const falloff = Math.max(0.3, 1 - (distance / info.range) * 0.7);
-  let damage = info.baseDamage * falloff;
+  const falloffStart = info.falloffStart ?? 0;
+  const falloffEnd = info.falloffEnd ?? info.range;
+  const minDamage = info.minDamage ?? info.baseDamage * 0.3;
+  const progress = Math.max(0, Math.min(1, (distance - falloffStart) / Math.max(1, falloffEnd - falloffStart)));
+  let damage = info.baseDamage + (minDamage - info.baseDamage) * progress;
 
   if (bodyPart === 'head') {
     damage *= info.headshotMultiplier;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DEFAULT_GAME_CONFIG } from '../config';
+import { DEFAULT_GAME_CONFIG, DEFAULT_GAME_SETTINGS, type GameSettings } from '../config';
 import type { InputState } from '../input/InputManager';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 
@@ -66,6 +66,12 @@ export class PlayerController {
   private currentFov = BASE_FOV;
   private targetFov = BASE_FOV;
   private isAiming = false;
+  private settings: Pick<GameSettings, 'sensitivity' | 'adsSensitivityMultiplier' | 'fov' | 'invertY'> = {
+    sensitivity: DEFAULT_GAME_SETTINGS.sensitivity,
+    adsSensitivityMultiplier: DEFAULT_GAME_SETTINGS.adsSensitivityMultiplier,
+    fov: DEFAULT_GAME_SETTINGS.fov,
+    invertY: DEFAULT_GAME_SETTINGS.invertY,
+  };
 
   // 相机后坐力
   private cameraRecoilPitch = 0;
@@ -99,8 +105,11 @@ export class PlayerController {
   }
 
   private updateRotation(mouseMovement: { x: number; y: number }): void {
-    this.yaw -= mouseMovement.x * MOUSE_SENSITIVITY;
-    this.pitch -= mouseMovement.y * MOUSE_SENSITIVITY;
+    const sensitivity = MOUSE_SENSITIVITY * (this.settings.sensitivity / 50);
+    const aimingMultiplier = this.isAiming ? this.settings.adsSensitivityMultiplier : 1;
+    const invertY = this.settings.invertY ? -1 : 1;
+    this.yaw -= mouseMovement.x * sensitivity * aimingMultiplier;
+    this.pitch -= mouseMovement.y * sensitivity * aimingMultiplier * invertY;
     this.pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, this.pitch));
   }
 
@@ -112,7 +121,12 @@ export class PlayerController {
     if (!pos) return;
 
     const wasGrounded = this.isGrounded;
-    this.isGrounded = pos.y <= this.currentHeight / 2 + 0.05;
+    const ground = this.physicsWorld.probeGround(
+      this.bodyId,
+      PLAYER_CONFIG.groundProbeDistance,
+      THREE.MathUtils.degToRad(PLAYER_CONFIG.maxSlopeAngleDegrees),
+    );
+    this.isGrounded = ground.grounded;
 
     // 坠落伤害检测
     if (!wasGrounded && this.isGrounded && this.prevVelocityY < -FALL_DAMAGE_THRESHOLD) {
@@ -194,7 +208,7 @@ export class PlayerController {
     } else if (this.isSprinting) {
       this.targetFov = SPRINT_FOV;
     } else {
-      this.targetFov = BASE_FOV;
+      this.targetFov = this.settings.fov;
     }
     this.currentFov += (this.targetFov - this.currentFov) * Math.min(1, FOV_LERP_SPEED * dt);
     this.camera.fov = this.currentFov;
@@ -204,6 +218,15 @@ export class PlayerController {
   // 设置瞄准状态（由 GameScene 调用）
   setAiming(aiming: boolean): void {
     this.isAiming = aiming;
+  }
+
+  applySettings(settings: GameSettings): void {
+    this.settings = {
+      sensitivity: settings.sensitivity,
+      adsSensitivityMultiplier: settings.adsSensitivityMultiplier,
+      fov: settings.fov,
+      invertY: settings.invertY,
+    };
   }
 
   private updateCameraRecoil(dt: number): void {

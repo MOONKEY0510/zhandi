@@ -26,6 +26,13 @@ export interface WeaponConfig {
   range: number;
   headshotMultiplier: number;
   bulletSpeed: number;
+  minDamage: number;
+  falloffStart: number;
+  falloffEnd: number;
+  firstShotRecoilMultiplier: number;
+  movingSpreadMultiplier: number;
+  crouchSpreadMultiplier: number;
+  boltActionTime?: number;
 }
 
 export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
@@ -41,7 +48,13 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     recoil: 0.04,
     range: 100,
     headshotMultiplier: 2.0,
-    bulletSpeed: 600,
+    bulletSpeed: 620,
+    minDamage: 18,
+    falloffStart: 25,
+    falloffEnd: 80,
+    firstShotRecoilMultiplier: 1.35,
+    movingSpreadMultiplier: 1.8,
+    crouchSpreadMultiplier: 0.75,
   },
   [WeaponType.SMG]: {
     name: 'Suomi KP/-31',
@@ -56,6 +69,12 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     range: 60,
     headshotMultiplier: 1.5,
     bulletSpeed: 400,
+    minDamage: 12,
+    falloffStart: 15,
+    falloffEnd: 60,
+    firstShotRecoilMultiplier: 1.2,
+    movingSpreadMultiplier: 1.5,
+    crouchSpreadMultiplier: 0.8,
   },
   [WeaponType.LMG]: {
     name: 'MG42',
@@ -70,6 +89,12 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     range: 120,
     headshotMultiplier: 1.8,
     bulletSpeed: 800,
+    minDamage: 20,
+    falloffStart: 35,
+    falloffEnd: 110,
+    firstShotRecoilMultiplier: 1.45,
+    movingSpreadMultiplier: 2.2,
+    crouchSpreadMultiplier: 0.65,
   },
   [WeaponType.BOLT_RIFLE]: {
     name: 'Kar98k',
@@ -83,7 +108,14 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     recoil: 0.15,
     range: 200,
     headshotMultiplier: 2.5,
-    bulletSpeed: 1000,
+    bulletSpeed: 760,
+    minDamage: 55,
+    falloffStart: 60,
+    falloffEnd: 200,
+    firstShotRecoilMultiplier: 1,
+    movingSpreadMultiplier: 3,
+    crouchSpreadMultiplier: 0.6,
+    boltActionTime: 0.8,
   },
 };
 
@@ -96,6 +128,8 @@ export class Weapon {
   lastFireTime: number = 0;
   burstCount: number = 0;
   burstResetTimer: number = 0;
+  shotsInBurst: number = 0;
+  boltReadyTime: number = 0;
 
   constructor(type: WeaponType) {
     this.config = WEAPON_CONFIGS[type];
@@ -105,6 +139,7 @@ export class Weapon {
   canFire(currentTime: number): boolean {
     if (this.isReloading) return false;
     if (this.currentAmmo <= 0) return false;
+    if (currentTime < this.boltReadyTime) return false;
 
     const timeSinceLastFire = (currentTime - this.lastFireTime) / 1000;
     return timeSinceLastFire >= 1 / this.config.fireRate;
@@ -114,6 +149,8 @@ export class Weapon {
     if (!this.canFire(currentTime)) return false;
     this.currentAmmo--;
     this.lastFireTime = currentTime;
+    this.shotsInBurst++;
+    if (this.config.boltActionTime) this.boltReadyTime = currentTime + this.config.boltActionTime * 1000;
     return true;
   }
 
@@ -145,6 +182,17 @@ export class Weapon {
   getReloadProgress(currentTime: number): number {
     if (!this.isReloading) return 0;
     return Math.min(1, (currentTime - this.reloadStartTime) / (this.config.reloadTime * 1000));
+  }
+
+  getRecoilMultiplier(currentTime: number): number {
+    const burstResetMs = 250;
+    if (currentTime - this.lastFireTime > burstResetMs) this.shotsInBurst = 0;
+    return this.shotsInBurst <= 1 ? this.config.firstShotRecoilMultiplier : 1;
+  }
+
+  getSpreadMultiplier(moving: boolean, crouching: boolean): number {
+    if (crouching) return this.config.crouchSpreadMultiplier;
+    return moving ? this.config.movingSpreadMultiplier : 1;
   }
 }
 

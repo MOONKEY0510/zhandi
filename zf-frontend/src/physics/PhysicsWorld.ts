@@ -1,5 +1,12 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 
+export interface GroundProbe {
+  grounded: boolean;
+  distance: number;
+  normal: { x: number; y: number; z: number };
+  slopeAngle: number;
+}
+
 export class PhysicsWorld {
   world: RAPIER.World;
   gravity = { x: 0, y: -9.81, z: 0 };
@@ -49,6 +56,42 @@ export class PhysicsWorld {
   step(dt: number): void {
     this.world.timestep = dt;
     this.world.step();
+  }
+
+  probeGround(id: string, maxDistance: number, maxSlopeAngle: number): GroundProbe {
+    const body = this.bodies.get(id);
+    if (!body) {
+      return { grounded: false, distance: Infinity, normal: { x: 0, y: 1, z: 0 }, slopeAngle: 0 };
+    }
+
+    this.world.propagateModifiedBodyPositionsToColliders();
+    const position = body.rigidBody.translation();
+    const ray = new RAPIER.Ray(
+      new RAPIER.Vector3(position.x, position.y, position.z),
+      new RAPIER.Vector3(0, -1, 0),
+    );
+    const hit = this.world.castRayAndGetNormal(
+      ray,
+      maxDistance,
+      true,
+      undefined,
+      undefined,
+      body.collider,
+      body.rigidBody,
+    );
+
+    if (!hit) {
+      return { grounded: false, distance: Infinity, normal: { x: 0, y: 1, z: 0 }, slopeAngle: 0 };
+    }
+
+    const normal = { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z };
+    const slopeAngle = Math.acos(Math.max(-1, Math.min(1, normal.y)));
+    return {
+      grounded: hit.timeOfImpact <= maxDistance && slopeAngle <= maxSlopeAngle,
+      distance: hit.timeOfImpact,
+      normal,
+      slopeAngle,
+    };
   }
 
   getBodyPosition(id: string): { x: number; y: number; z: number } | null {
