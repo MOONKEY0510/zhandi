@@ -2,8 +2,6 @@ import * as THREE from 'three';
 import { Weapon, type WeaponConfig, WeaponType } from './WeaponSystem';
 
 const ADS_POSITION = new THREE.Vector3(0, -0.15, -0.35);
-const ADS_FOV = 55;
-const BASE_FOV = 75;
 const ADS_LERP_SPEED = 10;
 const SWITCH_DURATION = 0.4;
 

@@ -1,10 +1,11 @@
 import { defineConfig } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: './',
   build: {
     target: 'esnext',
-    outDir: 'dist',
+    outDir: mode === 'check' ? 'dist-check' : 'dist',
+    emptyOutDir: mode !== 'check',
     sourcemap: false,
     minify: 'esbuild',
     rollupOptions: {
@@ -24,4 +25,4 @@ export default defineConfig({
   optimizeDeps: {
     include: ['three', '@dimforge/rapier3d-compat'],
   },
-});
+}));

@@ -46,7 +46,8 @@ export class PhysicsWorld {
     this.world.createCollider(colliderDesc, rigidBody);
   }
 
-  step(_dt: number): void {
+  step(dt: number): void {
+    this.world.timestep = dt;
     this.world.step();
   }
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { gameplayRandom } from '../core/Random';
 
 export interface MapConfig {
   size: number;
@@ -62,15 +63,15 @@ export class BerlinRuins {
     for (let i = 0; i < this.config.buildingCount; i++) {
       const building = new THREE.Group();
 
-      const width = 8 + Math.random() * 12;
-      const depth = 8 + Math.random() * 12;
-      const height = 5 + Math.random() * 15;
+      const width = 8 + gameplayRandom() * 12;
+      const depth = 8 + gameplayRandom() * 12;
+      const height = 5 + gameplayRandom() * 15;
 
-      const x = (Math.random() - 0.5) * (this.config.size - width);
-      const z = (Math.random() - 0.5) * (this.config.size - depth);
+      const x = (gameplayRandom() - 0.5) * (this.config.size - width);
+      const z = (gameplayRandom() - 0.5) * (this.config.size - depth);
 
       const geometry = new THREE.BoxGeometry(width, height, depth);
-      const color = buildingColors[Math.floor(Math.random() * buildingColors.length)];
+      const color = buildingColors[Math.floor(gameplayRandom() * buildingColors.length)];
       const material = new THREE.MeshStandardMaterial({
         color,
         roughness: 0.8,
@@ -91,8 +92,8 @@ export class BerlinRuins {
         });
         const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
         windowMesh.position.set(
-          x + (Math.random() - 0.5) * (width - 2),
-          2 + Math.random() * (height - 4),
+          x + (gameplayRandom() - 0.5) * (width - 2),
+          2 + gameplayRandom() * (height - 4),
           z + (width / 2) + 0.1
         );
         building.add(windowMesh);
@@ -108,7 +109,7 @@ export class BerlinRuins {
     for (let i = 0; i < this.config.rubbleCount; i++) {
       const rubble = new THREE.Group();
 
-      const size = 0.5 + Math.random() * 2;
+      const size = 0.5 + gameplayRandom() * 2;
       const geometry = new THREE.BoxGeometry(size, size, size);
       const material = new THREE.MeshStandardMaterial({
         color: 0x4a4a4a,
@@ -117,14 +118,14 @@ export class BerlinRuins {
       });
       const mesh = new THREE.Mesh(geometry, material);
 
-      const x = (Math.random() - 0.5) * (this.config.size - 10);
-      const z = (Math.random() - 0.5) * (this.config.size - 10);
+      const x = (gameplayRandom() - 0.5) * (this.config.size - 10);
+      const z = (gameplayRandom() - 0.5) * (this.config.size - 10);
 
       mesh.position.set(x, size / 2, z);
       mesh.rotation.set(
-        Math.random() * Math.PI,
-        Math.random() * Math.PI,
-        Math.random() * Math.PI
+        gameplayRandom() * Math.PI,
+        gameplayRandom() * Math.PI,
+        gameplayRandom() * Math.PI
       );
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -145,10 +146,10 @@ export class BerlinRuins {
 
     for (let i = 0; i < 100; i++) {
       const debris = new THREE.Mesh(debrisGeometry, debrisMaterial);
-      const x = (Math.random() - 0.5) * this.config.size;
-      const z = (Math.random() - 0.5) * this.config.size;
+      const x = (gameplayRandom() - 0.5) * this.config.size;
+      const z = (gameplayRandom() - 0.5) * this.config.size;
       debris.position.set(x, 0.15, z);
-      debris.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+      debris.rotation.set(gameplayRandom() * Math.PI, gameplayRandom() * Math.PI, 0);
       debris.castShadow = true;
       this.scene.add(debris);
     }
@@ -200,9 +201,9 @@ export class BerlinRuins {
     for (let i = 0; i < 5; i++) {
       const pointLight = new THREE.PointLight(0xffaa00, 0.5, 20);
       pointLight.position.set(
-        (Math.random() - 0.5) * this.config.size,
+        (gameplayRandom() - 0.5) * this.config.size,
         3,
-        (Math.random() - 0.5) * this.config.size
+        (gameplayRandom() - 0.5) * this.config.size
       );
       this.scene.add(pointLight);
     }

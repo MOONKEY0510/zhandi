@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { gameplayRandom } from '../core/Random';
 import { TeamId } from '../game/ConquestMode';
 
 export enum AIState {
@@ -422,7 +423,7 @@ export class AIBot {
     knockback.y = 0.3;
     this.mesh.position.add(knockback);
     this.mesh.rotation.x = Math.PI / 2;
-    this.muzzleFlashMesh.material.opacity = 0;
+    (this.muzzleFlashMesh.material as THREE.MeshBasicMaterial).opacity = 0;
 
     // 死亡红闪
     this.hitPulse = 1.5;
@@ -559,8 +560,9 @@ export class AIBot {
     this.updateWalkAnimation(deltaTime);
 
     // 枪口火焰淡出
-    if (this.muzzleFlashMesh.material.opacity > 0) {
-      this.muzzleFlashMesh.material.opacity = Math.max(0, this.muzzleFlashMesh.material.opacity - deltaTime * 15);
+    const muzzleMat = this.muzzleFlashMesh.material as THREE.MeshBasicMaterial;
+    if (muzzleMat.opacity > 0) {
+      muzzleMat.opacity = Math.max(0, muzzleMat.opacity - deltaTime * 15);
     }
 
     // 卡住检测
@@ -700,13 +702,13 @@ export class AIBot {
     const effectiveFireRate = this.isReloading ? 0 : this.fireRate;
 
     // 随机射击间隔（±30%）
-    const randomInterval = (1 / effectiveFireRate) * (0.7 + Math.random() * 0.6);
+    const randomInterval = (1 / effectiveFireRate) * (0.7 + gameplayRandom() * 0.6);
     if (timeSinceLastFire < randomInterval) return;
 
     // 模拟弹匣：每 10 发换弹
     if (this.lastFireTime > 0 && Math.floor((this.lastFireTime) / 1000) !== Math.floor(currentTime / 1000)) {
       // 每秒检查一次是否需要换弹
-      if (Math.random() < 0.15) {
+      if (gameplayRandom() < 0.15) {
         this.isReloading = true;
         this.reloadEndTime = currentTime + this.reloadTime * 1000;
         return;
@@ -716,7 +718,7 @@ export class AIBot {
     this.lastFireTime = currentTime;
 
     // 枪口火焰
-    this.muzzleFlashMesh.material.opacity = 1;
+    (this.muzzleFlashMesh.material as THREE.MeshBasicMaterial).opacity = 1;
 
     // 计算射击方向（从枪口到玩家，带散布）
     const muzzlePos = new THREE.Vector3();
@@ -727,9 +729,9 @@ export class AIBot {
     // 散布：精度越低散布越大 + 受击精度惩罚
     const effectiveAccuracy = Math.max(0.2, this.accuracy - this.accuracyPenalty);
     const spread = (1 - effectiveAccuracy) * 0.2;
-    direction.x += (Math.random() - 0.5) * spread;
-    direction.y += (Math.random() - 0.5) * spread;
-    direction.z += (Math.random() - 0.5) * spread;
+    direction.x += (gameplayRandom() - 0.5) * spread;
+    direction.y += (gameplayRandom() - 0.5) * spread;
+    direction.z += (gameplayRandom() - 0.5) * spread;
     direction.normalize();
 
     // 触发射击回调（由 GameScene 处理弹道轨迹和伤害）
@@ -769,7 +771,7 @@ export class AIBot {
       this.stuckTimer += deltaTime;
       if (this.stuckTimer > 0.5) {
         // 卡住了，随机改变避障方向
-        const angle = Math.random() * Math.PI * 2;
+        const angle = gameplayRandom() * Math.PI * 2;
         this.avoidDirection.set(Math.cos(angle), 0, Math.sin(angle));
         this.stuckTimer = 0;
       }
@@ -841,14 +843,14 @@ export class AISystem {
   // 计算 AI 生成位置
   // 敌方 AI 在营地深处生成（远离地图中心），友方 AI 在营地边缘生成
   private static getSpawnPosition(campCenter: THREE.Vector3, index: number, total: number, isEnemy: boolean): THREE.Vector3 {
-    const angle = (index / total) * Math.PI * 2 + Math.random() * 0.5;
+    const angle = (index / total) * Math.PI * 2 + gameplayRandom() * 0.5;
 
     if (isEnemy) {
       // 敌方：在营地深处生成，远离地图中心
       // 营地中心向远离原点方向偏移 10-20 米
       const awayFromCenter = campCenter.clone().normalize();
-      const depthOffset = 10 + Math.random() * 10;
-      const spreadRadius = 3 + Math.random() * 5;
+      const depthOffset = 10 + gameplayRandom() * 10;
+      const spreadRadius = 3 + gameplayRandom() * 5;
 
       return new THREE.Vector3(
         campCenter.x + awayFromCenter.x * depthOffset + Math.cos(angle) * spreadRadius,
@@ -857,7 +859,7 @@ export class AISystem {
       );
     } else {
       // 友方：在营地边缘生成，靠近玩家出生点
-      const radius = 3 + Math.random() * 5;
+      const radius = 3 + gameplayRandom() * 5;
       return new THREE.Vector3(
         campCenter.x + Math.cos(angle) * radius,
         0, // 脚底在地面
@@ -876,7 +878,7 @@ export class AISystem {
 
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * Math.PI * 2;
-      const radius = 20 + Math.random() * 10;
+      const radius = 20 + gameplayRandom() * 10;
       const position = new THREE.Vector3(
         Math.cos(angle) * radius,
         0, // 脚底在地面

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { resolveGameConfig, validateGameConfig } from '../config';
+import { FixedStepClock, GameState, GameStateMachine } from '../core';
+import { gameplayRandom, useGameplaySeed, useSystemRandom } from '../core/Random';
+import { PerformanceMonitor, PerformancePanel } from '../performance';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
@@ -45,6 +49,12 @@ export class GameScene {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private container: HTMLElement;
+  private readonly config = resolveGameConfig();
+  private readonly stateMachine = new GameStateMachine();
+  private readonly simulationClock: FixedStepClock;
+  private readonly performanceMonitor: PerformanceMonitor;
+  private readonly performancePanel: PerformancePanel;
+  private lastPerformanceCapture = 0;
   private physicsWorld!: PhysicsWorld;
   private player: PlayerController | null = null;
   private inputManager: InputManager;
@@ -93,7 +103,7 @@ export class GameScene {
   // 游戏模式 & 成就
   private gameMode!: GameMode;
   private achievementSystem!: AchievementSystem;
-  private playerId = 'player_' + Math.random().toString(36).substring(2, 8);
+  private playerId: string;
 
   // 征服模式
   private conquestMode!: ConquestMode;
@@ -113,6 +123,9 @@ export class GameScene {
     color: 0x000000, transparent: true, opacity: 0.8, side: THREE.DoubleSide,
   });
 
+  // 火花特效池
+  private sparkEffects: THREE.Points[] = [];
+
   // 血液特效池
   private bloodParticles: THREE.Points[] = [];
   private lastDamageDirection: number | null = null;
@@ -129,17 +142,17 @@ export class GameScene {
   private aiHealthBars: Map<AIBot, THREE.Sprite> = new Map();
 
   // 状态
-  private lastTime = 0;
   private animationId = 0;
+  private simulationTimeMs = 0;
+  private pendingMouseMovement = { x: 0, y: 0 };
   private lastNetworkUpdate = 0;
-  private networkUpdateInterval = 50;
+  private networkUpdateInterval = this.config.network.updateIntervalMs;
   private killCount = 0;
   private deathCount = 0;
   private hitMarkerTime = 0;
   private hitMarkerHeadshotTime = 0;
   private lastFootstepTime = 0;
   private footstepInterval = 350;
-  private gameStarted = false;
 
   // 复用向量
   private tmpVec1 = new THREE.Vector3();
@@ -150,6 +163,16 @@ export class GameScene {
 
   constructor(container: HTMLElement) {
     this.container = container;
+
+    const configErrors = validateGameConfig(this.config);
+    if (configErrors.length > 0) {
+      throw new Error(`Invalid game config: ${configErrors.join(', ')}`);
+    }
+
+    if (this.config.benchmark.enabled) useGameplaySeed(this.config.benchmark.seed);
+    else useSystemRandom();
+    this.playerId = 'player_' + gameplayRandom().toString(36).substring(2, 8);
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87CEEB);
     this.scene.fog = new THREE.Fog(0x87CEEB, 20, 120);
@@ -163,6 +186,15 @@ export class GameScene {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
+    this.simulationClock = new FixedStepClock({
+      stepSeconds: 1 / this.config.simulation.stepHz,
+      maxFrameSeconds: this.config.simulation.maxFrameSeconds,
+      maxSubSteps: this.config.simulation.maxSubSteps,
+    });
+    this.performanceMonitor = new PerformanceMonitor(this.config.performance.sampleWindowSize);
+    this.performancePanel = new PerformancePanel(this.performanceMonitor);
+    this.performancePanel.setVisible(this.config.benchmark.enabled);
+
     this.scene.add(this.camera);
     this.inputManager = new InputManager();
 
@@ -170,6 +202,7 @@ export class GameScene {
     this.setupDeathOverlay();
 
     window.addEventListener('resize', this.onResize);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   async init(): Promise<void> {
@@ -197,12 +230,24 @@ export class GameScene {
       this.settingsMenu.hide();
     };
 
-    // 等待玩家点击开始
+    this.stateMachine.transition(GameState.MENU);
+    this.animate(performance.now());
   }
 
   private async startGame(): Promise<void> {
-    this.gameStarted = true;
+    if (!this.stateMachine.is(GameState.MENU)) return;
+    this.stateMachine.transition(GameState.LOADING);
 
+    try {
+      await this.initializeGameWorld();
+    } catch (error) {
+      console.error('Failed to initialize game world', error);
+      this.stateMachine.transition(GameState.MENU);
+      this.mainMenu.show();
+    }
+  }
+
+  private async initializeGameWorld(): Promise<void> {
     // 物理
     this.physicsWorld = await PhysicsWorld.init();
     this.physicsWorld.createGround(120);
@@ -215,7 +260,7 @@ export class GameScene {
     // 玩家
     this.player = new PlayerController(this.physicsWorld, this.camera);
     this.player.onFallDamage = (damage: number) => {
-      const time = performance.now();
+      const time = this.simulationTimeMs;
       this.player?.addShake(0.1, 5);
       if (this.healthSystem.takeDamage(damage, time)) {
         this.handlePlayerDeath(time);
@@ -255,7 +300,14 @@ export class GameScene {
     // AI - 分阵营生成
     const axisSpawn = this.conquestMode.teams.get(TeamId.AXIS)!.spawnPoint;
     const alliesSpawn = this.conquestMode.teams.get(TeamId.ALLIES)!.spawnPoint;
-    this.aiSystem = AISystem.createTeamBots(this.scene, 4, 4, axisSpawn, alliesSpawn, this.conquestMode.playerTeam);
+    this.aiSystem = AISystem.createTeamBots(
+      this.scene,
+      this.config.ai.axisCount,
+      this.config.ai.alliesCount,
+      axisSpawn,
+      alliesSpawn,
+      this.conquestMode.playerTeam,
+    );
     this.setupAIHealthBars();
     this.setupAIFireCallback();
 
@@ -274,8 +326,13 @@ export class GameScene {
 
     // 天气
     this.weatherSystem = new WeatherSystem(this.scene, this.ambientLight, this.dirLight);
-    this.weatherSystem.enableDayNightCycle(true);
-    this.weatherSystem.enableAutoWeather(true);
+    this.weatherSystem.setWeather(this.config.benchmark.weather);
+    this.weatherSystem.enableDayNightCycle(
+      this.config.benchmark.enabled ? this.config.benchmark.dayNightCycle : true,
+    );
+    this.weatherSystem.enableAutoWeather(
+      this.config.benchmark.enabled ? this.config.benchmark.autoWeather : true,
+    );
 
     // 游戏模式 (TDM - 用于击杀统计)
     this.gameMode = new GameMode(GameModeType.TDM);
@@ -293,20 +350,28 @@ export class GameScene {
     this.inputManager.requestPointerLock();
     this.setupInputCallbacks();
 
-    this.lastTime = performance.now();
-    this.animate(this.lastTime);
+    this.simulationTimeMs = performance.now();
+    this.simulationClock.reset(this.simulationTimeMs);
+    this.stateMachine.transition(GameState.PLAYING);
 
     // 尝试连接服务器
     try {
-      await this.connectToServer('ws://localhost:8080', this.playerId);
+      await this.connectToServer(this.config.network.serverUrl, this.playerId);
     } catch (error) {
       console.warn('Running in offline mode', error);
     }
   }
 
   private spawnVehicles(): void {
-    this.vehicleSystem.spawnVehicle(VehicleType.JEEP, new THREE.Vector3(15, 1, 15));
-    this.vehicleSystem.spawnVehicle(VehicleType.JEEP, new THREE.Vector3(-15, 1, -15));
+    const spawnPositions = [
+      new THREE.Vector3(15, 1, 15),
+      new THREE.Vector3(-15, 1, -15),
+    ];
+    const vehicleCount = Math.min(this.config.benchmark.vehicleCount, spawnPositions.length);
+
+    for (let index = 0; index < vehicleCount; index++) {
+      this.vehicleSystem.spawnVehicle(VehicleType.JEEP, spawnPositions[index]);
+    }
   }
 
   private setupInputCallbacks(): void {
@@ -319,7 +384,7 @@ export class GameScene {
     });
 
     this.inputManager.onReloadPressed(() => {
-      const time = performance.now();
+      const time = this.simulationTimeMs;
       if (this.weaponSystem.reload(time)) {
         this.audioSystem.play(SoundType.RELOAD);
       }
@@ -346,11 +411,14 @@ export class GameScene {
     });
 
     this.inputManager.onEscape(() => {
-      if (this.settingsMenu.container.style.display === 'flex') {
+      if (this.stateMachine.is(GameState.PAUSED)) {
         this.settingsMenu.hide();
+        this.stateMachine.transition(GameState.PLAYING);
+        this.simulationClock.reset(performance.now());
         this.inputManager.requestPointerLock();
-      } else {
+      } else if (this.stateMachine.is(GameState.PLAYING)) {
         this.settingsMenu.show();
+        this.stateMachine.transition(GameState.PAUSED);
         document.exitPointerLock();
       }
     });
@@ -496,6 +564,9 @@ export class GameScene {
     if (this.conquestMode.isGameOver) {
       const winnerName = this.conquestMode.winner === TeamId.AXIS ? '德军' : '苏军';
       this.hud.addKillMessage(`游戏结束！${winnerName} 获胜！`, currentTime);
+      if (this.stateMachine.is(GameState.PLAYING)) {
+        this.stateMachine.transition(GameState.ROUND_END);
+      }
     }
   }
 
@@ -670,9 +741,9 @@ export class GameScene {
       positions[i * 3 + 1] = position.y;
       positions[i * 3 + 2] = position.z;
       velocities.push(new THREE.Vector3(
-        (Math.random() - 0.5) * 15,
-        Math.random() * 10,
-        (Math.random() - 0.5) * 15
+        (gameplayRandom() - 0.5) * 15,
+        gameplayRandom() * 10,
+        (gameplayRandom() - 0.5) * 15
       ));
     }
     const geo = new THREE.BufferGeometry();
@@ -732,10 +803,10 @@ export class GameScene {
     const count = 40;
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const r = Math.random() * radius;
+      const angle = gameplayRandom() * Math.PI * 2;
+      const r = gameplayRandom() * radius;
       positions[i * 3] = position.x + Math.cos(angle) * r;
-      positions[i * 3 + 1] = position.y + Math.random() * 2;
+      positions[i * 3 + 1] = position.y + gameplayRandom() * 2;
       positions[i * 3 + 2] = position.z + Math.sin(angle) * r;
     }
     const geo = new THREE.BufferGeometry();
@@ -773,7 +844,7 @@ export class GameScene {
     sprite.position.y += 0.5;
     sprite.userData.life = 0;
     sprite.userData.maxLife = 0.8;
-    sprite.userData.velocity = new THREE.Vector3((Math.random() - 0.5) * 0.5, 2, (Math.random() - 0.5) * 0.5);
+    sprite.userData.velocity = new THREE.Vector3((gameplayRandom() - 0.5) * 0.5, 2, (gameplayRandom() - 0.5) * 0.5);
     this.scene.add(sprite);
     this.damageNumbers.push(sprite);
   }
@@ -807,10 +878,10 @@ export class GameScene {
     const dir = this.tmpVec2;
     this.camera.getWorldDirection(dir);
 
-    const equipment = this.equipmentSystem.throwEquipment(type, pos, dir.clone(), performance.now());
+    const equipment = this.equipmentSystem.throwEquipment(type, pos, dir.clone(), this.simulationTimeMs);
     if (equipment) {
       this.audioSystem.play(SoundType.UI_CLICK);
-      this.hud.addKillMessage(`投掷 ${equipment.config.name}`, performance.now());
+      this.hud.addKillMessage(`投掷 ${equipment.config.name}`, this.simulationTimeMs);
     }
   }
 
@@ -821,7 +892,7 @@ export class GameScene {
       this.currentVehicle.vehicle.exitVehicle(this.playerId);
       this.inVehicle = false;
       this.currentVehicle = null;
-      this.hud.addKillMessage('离开载具', performance.now());
+      this.hud.addKillMessage('离开载具', this.simulationTimeMs);
     } else {
       // 上车 - 查找附近载具
       const playerPos = this.player?.getPosition();
@@ -836,7 +907,7 @@ export class GameScene {
           if (vehicle.enterVehicle(this.playerId, isDriver)) {
             this.inVehicle = true;
             this.currentVehicle = { vehicle, isDriver };
-            this.hud.addKillMessage(`进入 ${vehicle.config.name}`, performance.now());
+            this.hud.addKillMessage(`进入 ${vehicle.config.name}`, this.simulationTimeMs);
             break;
           }
         }
@@ -844,7 +915,7 @@ export class GameScene {
     }
   }
 
-  private updateVehicleControl(dt: number): void {
+  private updateVehicleControl(_dt: number): void {
     if (!this.inVehicle || !this.currentVehicle) return;
     const vehicle = this.currentVehicle.vehicle;
     if (!this.currentVehicle.isDriver) return;
@@ -902,8 +973,8 @@ export class GameScene {
     this.camera.getWorldDirection(direction);
 
     const spread = 1 - config.accuracy;
-    direction.x += (Math.random() - 0.5) * spread * 0.05;
-    direction.y += (Math.random() - 0.5) * spread * 0.05;
+    direction.x += (gameplayRandom() - 0.5) * spread * 0.05;
+    direction.y += (gameplayRandom() - 0.5) * spread * 0.05;
     direction.normalize();
 
     const targets = [...this.aiSystem.getAllTargetableMeshes(), ...this.environmentObjects];
@@ -1078,6 +1149,7 @@ export class GameScene {
 
   // ====== 弹孔 ======
   private spawnImpact(point: THREE.Vector3, normal: THREE.Vector3): void {
+    // 弹孔贴花
     const mesh = new THREE.Mesh(this.impactGeometry, this.impactMaterial.clone());
     mesh.position.copy(point);
     mesh.lookAt(this.tmpVec1.copy(point).add(normal));
@@ -1086,6 +1158,75 @@ export class GameScene {
     if (this.impacts.length > 30) {
       const old = this.impacts.shift();
       if (old) { this.scene.remove(old.mesh); (old.mesh.material as THREE.Material).dispose(); }
+    }
+
+    // 碰撞火花粒子
+    this.spawnImpactSpark(point, normal);
+  }
+
+  // ====== 碰撞火花 ======
+  private sparkGeometry = new THREE.BufferGeometry();
+  private sparkMaterial = new THREE.PointsMaterial({
+    color: 0xffdd44, size: 0.04, transparent: true, opacity: 1,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+
+  private spawnImpactSpark(point: THREE.Vector3, normal: THREE.Vector3): void {
+    const count = 8 + Math.floor(gameplayRandom() * 6);
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = point.x;
+      positions[i * 3 + 1] = point.y;
+      positions[i * 3 + 2] = point.z;
+
+      // 沿法线方向散射，速度随机
+      const theta = gameplayRandom() * Math.PI * 2;
+      const phi = gameplayRandom() * Math.PI * 0.4;
+      const speed = 2 + gameplayRandom() * 4;
+      velocities.push(new THREE.Vector3(
+        Math.cos(theta) * Math.sin(phi) * speed + normal.x * 1.5,
+        Math.abs(Math.sin(theta) * Math.sin(phi)) * speed + 0.5,
+        Math.sin(theta) * Math.sin(phi) * speed + normal.z * 1.5,
+      ));
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = this.sparkMaterial.clone();
+    const points = new THREE.Points(geo, mat);
+    points.userData = { velocities, life: 0, maxLife: 0.4 };
+    this.scene.add(points);
+    this.sparkEffects.push(points);
+  }
+
+  private updateSparks(dt: number): void {
+    for (let i = this.sparkEffects.length - 1; i >= 0; i--) {
+      const spark = this.sparkEffects[i];
+      const life = spark.userData.life as number;
+      const maxLife = spark.userData.maxLife as number;
+      const velocities = spark.userData.velocities as THREE.Vector3[];
+      const positions = spark.geometry.attributes.position.array as Float32Array;
+
+      for (let j = 0; j < velocities.length; j++) {
+        velocities[j].y -= 9.8 * dt;
+        positions[j * 3] += velocities[j].x * dt;
+        positions[j * 3 + 1] += velocities[j].y * dt;
+        positions[j * 3 + 2] += velocities[j].z * dt;
+      }
+      spark.geometry.attributes.position.needsUpdate = true;
+      spark.userData.life = life + dt;
+
+      const progress = (life + dt) / maxLife;
+      if (progress >= 1) {
+        this.scene.remove(spark);
+        spark.geometry.dispose();
+        (spark.material as THREE.Material).dispose();
+        this.sparkEffects.splice(i, 1);
+      } else {
+        (spark.material as THREE.PointsMaterial).opacity = 1 - progress;
+      }
     }
   }
 
@@ -1114,11 +1255,11 @@ export class GameScene {
       positions[i * 3 + 1] = position.y;
       positions[i * 3 + 2] = position.z;
       // 向随机方向喷射，速度更快更猛
-      const theta = Math.random() * Math.PI * 2;
-      const speed = 3 + Math.random() * 6;
+      const theta = gameplayRandom() * Math.PI * 2;
+      const speed = 3 + gameplayRandom() * 6;
       velocities.push(new THREE.Vector3(
         Math.cos(theta) * speed * 0.7,
-        Math.abs(Math.sin(theta)) * 2.5 + Math.random() * 3,
+        Math.abs(Math.sin(theta)) * 2.5 + gameplayRandom() * 3,
         Math.sin(theta) * speed * 0.7
       ));
     }
@@ -1169,7 +1310,7 @@ export class GameScene {
   // ====== AI 射击回调 ======
   private setupAIFireCallback(): void {
     AIBot.onFire((origin, direction, damage, bot) => {
-      const currentTime = performance.now();
+      const currentTime = this.simulationTimeMs;
 
       // 阵营检查：只有敌方 AI 才能攻击玩家
       if (bot.team === this.conquestMode.playerTeam) {
@@ -1199,7 +1340,7 @@ export class GameScene {
       // 命中判定：射线距离玩家中心 < 0.6 米视为命中
       if (distToRay < 0.6) {
         // 命中概率受精度影响
-        if (Math.random() > bot.accuracy) return;
+        if (gameplayRandom() > bot.accuracy) return;
 
         const killed = this.healthSystem.takeDamage(damage, currentTime);
         this.hud.showDamageIndicator();
@@ -1211,7 +1352,7 @@ export class GameScene {
           const dx = bot.mesh.position.x - playerPos2.x;
           const dz = bot.mesh.position.z - playerPos2.z;
           const angleToDamage = Math.atan2(dx, dz);
-          const playerYaw = this.player.getRotation().yaw;
+          const playerYaw = this.player!.getRotation().yaw;
           this.lastDamageDirection = angleToDamage - playerYaw + Math.PI;
           this.lastDamageDirectionTime = currentTime;
         }
@@ -1312,7 +1453,7 @@ export class GameScene {
       const bot = this.aiSystem.bots[i];
       players.push({
         id: `bot_${i}`, name: `AI Bot ${i + 1}`, kills: 0, deaths: bot.state === 'dead' ? 1 : 0,
-        assists: 0, score: 0, ping: 30 + Math.floor(Math.random() * 50), team: 'B',
+        assists: 0, score: 0, ping: 30 + Math.floor(gameplayRandom() * 50), team: 'B',
       });
     }
 
@@ -1321,20 +1462,34 @@ export class GameScene {
 
   // ====== 主循环 ======
   private animate = (time: number): void => {
+    if (this.stateMachine.is(GameState.DISPOSED)) return;
     this.animationId = requestAnimationFrame(this.animate);
 
-    const dt = Math.min((time - this.lastTime) / 1000, 0.1);
-    this.lastTime = time;
+    if (this.stateMachine.is(GameState.PLAYING)) {
+      const mouseMovement = this.inputManager.getMouseMovement();
+      this.pendingMouseMovement.x += mouseMovement.x;
+      this.pendingMouseMovement.y += mouseMovement.y;
 
-    if (!this.gameStarted) {
-      this.renderer.render(this.scene, this.camera);
-      return;
+      this.simulationClock.advance(time, (dt) => {
+        this.simulationTimeMs += dt * 1_000;
+        this.simulateFixedStep(dt, this.simulationTimeMs);
+      });
+    } else {
+      this.simulationClock.reset(time);
     }
 
+    this.renderer.render(this.scene, this.camera);
+    if (this.stateMachine.is(GameState.PLAYING, GameState.PAUSED, GameState.ROUND_END)) {
+      this.updatePerformanceMetrics(time);
+    }
+  };
+
+  private simulateFixedStep(dt: number, time: number): void {
     // 玩家更新
     if (this.player && !this.healthSystem.isDead && !this.inVehicle) {
-      const mouseMovement = this.inputManager.getMouseMovement();
-      this.player.update(this.inputManager.state, mouseMovement, dt);
+      this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
+      this.pendingMouseMovement.x = 0;
+      this.pendingMouseMovement.y = 0;
     }
 
     // 载具控制
@@ -1364,6 +1519,7 @@ export class GameScene {
     this.updateBloodEffects(dt);
     this.updateExplosionEffects(dt);
     this.updateDamageNumbers(dt);
+    this.updateSparks(dt);
 
     // 战术装备
     this.equipmentSystem.update(dt, time);
@@ -1376,7 +1532,8 @@ export class GameScene {
         const playerVec = this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z);
         this.aiSystem.update(dt, time, playerVec);
         for (const bot of this.aiSystem.bots) {
-          if (bot.state !== 'dead' && !bot.target) {
+          // 只有敌方 AI 才能以玩家为目标，友军不索敌
+          if (bot.state !== 'dead' && bot.team !== this.conquestMode.playerTeam && !bot.target) {
             if (bot.mesh.position.distanceTo(playerVec) < bot.detectionRange) {
               bot.setTarget(this.camera);
             }
@@ -1482,7 +1639,7 @@ export class GameScene {
       this.aiSystem.bots.filter(b => b.state !== 'dead').map(b => ({
         x: b.mesh.position.x,
         z: b.mesh.position.z,
-        isFriendly: b.team === this.playerTeam,
+        isFriendly: b.team === this.conquestMode.playerTeam,
       }))
     );
 
@@ -1492,10 +1649,28 @@ export class GameScene {
       this.lastScoreboardUpdate = time;
     }
 
-    // 渲染
+    // 固定时间步物理
     this.physicsWorld.step(dt);
-    this.renderer.render(this.scene, this.camera);
-  };
+  }
+
+  private updatePerformanceMetrics(time: number): void {
+    this.performanceMonitor.update(time);
+    this.performanceMonitor.setRendererStats({
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      textures: this.renderer.info.memory.textures,
+      geometries: this.renderer.info.memory.geometries,
+    });
+    this.performanceMonitor.setEntityCount(
+      1 + this.aiSystem.bots.length + this.vehicleSystem.vehicles.length + this.remotePlayerMeshes.size,
+    );
+
+    if (time - this.lastPerformanceCapture >= this.config.performance.panelRefreshIntervalMs) {
+      const snapshot = this.performanceMonitor.capture(time);
+      this.performancePanel.update(snapshot, this.config.benchmark.enabled);
+      this.lastPerformanceCapture = time;
+    }
+  }
 
   private onResize = (): void => {
     this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -1503,9 +1678,22 @@ export class GameScene {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   };
 
+  private onVisibilityChange = (): void => {
+    if (document.hidden && this.stateMachine.is(GameState.PLAYING)) {
+      this.stateMachine.transition(GameState.PAUSED);
+      this.settingsMenu?.show();
+      document.exitPointerLock();
+    }
+    this.simulationClock.reset(performance.now());
+  };
+
   dispose(): void {
+    if (!this.stateMachine.is(GameState.DISPOSED)) {
+      this.stateMachine.transition(GameState.DISPOSED);
+    }
     cancelAnimationFrame(this.animationId);
     window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
     this.networkManager?.disconnect();
     this.aiSystem?.dispose();
@@ -1518,6 +1706,7 @@ export class GameScene {
     this.vehicleSystem?.dispose();
     this.equipmentSystem?.dispose();
     this.mapManager?.dispose();
+    this.performancePanel.dispose();
     this.renderer.dispose();
   }
 }

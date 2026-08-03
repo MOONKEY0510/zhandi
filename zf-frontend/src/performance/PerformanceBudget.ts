@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DEFAULT_GAME_CONFIG } from '../config';
 
 export interface PerformanceBudget {
   targetFPS: number;
@@ -9,11 +10,11 @@ export interface PerformanceBudget {
 }
 
 export const DEFAULT_BUDGET: PerformanceBudget = {
-  targetFPS: 60,
-  maxDrawCalls: 100,
-  maxTriangles: 100000,
-  maxTextureMemoryMB: 50,
-  maxFrameTime: 16.67,
+  targetFPS: DEFAULT_GAME_CONFIG.performance.targetFps,
+  maxDrawCalls: DEFAULT_GAME_CONFIG.performance.maxDrawCalls,
+  maxTriangles: DEFAULT_GAME_CONFIG.performance.maxTriangles,
+  maxTextureMemoryMB: DEFAULT_GAME_CONFIG.performance.maxTextureMemoryMB,
+  maxFrameTime: DEFAULT_GAME_CONFIG.performance.maxFrameTimeMs,
 };
 
 export class PerformanceBudgetManager {
@@ -70,10 +71,8 @@ export class PerformanceBudgetManager {
     this.currentStats.drawCalls = info.render.calls;
     this.currentStats.triangles = info.render.triangles;
 
-    let textureMemory = 0;
     const textures = renderer.info.memory.textures as number;
-    textureMemory = textures * 4 / (1024 * 1024);
-    this.currentStats.textureMemoryMB = textureMemory;
+    this.currentStats.textureMemoryMB = (textures * 4) / (1024 * 1024);
   }
 
   setFrameTime(frameTime: number): void {

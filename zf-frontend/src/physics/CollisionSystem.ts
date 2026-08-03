@@ -162,7 +162,7 @@ export class CollisionSystem {
   }
 
   dispose(): void {
-    for (const [id, collider] of this.colliders) {
+    for (const collider of this.colliders.values()) {
       this.world.removeRigidBody(collider.body);
     }
     this.colliders.clear();

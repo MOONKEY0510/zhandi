@@ -346,7 +346,7 @@ export class HUD {
     if (this.elements.damageDirection) {
       if (data.damageDirection !== null && data.damageDirection !== undefined) {
         this.elements.damageDirection.style.opacity = '1';
-        const arrow = this.elements.damageDirection.querySelector('#damage-arrow');
+        const arrow = this.elements.damageDirection.querySelector('#damage-arrow') as HTMLElement | null;
         if (arrow) {
           arrow.style.transform = `rotate(${data.damageDirection}rad)`;
         }

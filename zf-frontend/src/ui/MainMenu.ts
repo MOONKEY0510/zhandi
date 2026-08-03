@@ -1,5 +1,3 @@
-import * as THREE from 'three';
-
 export class MainMenu {
   container: HTMLElement;
   elements: {

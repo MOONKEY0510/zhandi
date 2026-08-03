@@ -1,3 +1,5 @@
+import { DEFAULT_GAME_CONFIG } from '../config';
+
 export enum WeaponType {
   ASSAULT_RIFLE = 'assault_rifle',
   SMG = 'smg',
@@ -88,7 +90,7 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
 export class Weapon {
   config: WeaponConfig;
   currentAmmo: number;
-  reserveAmmo: number = 120;
+  reserveAmmo: number = DEFAULT_GAME_CONFIG.combat.startingReserveAmmo;
   isReloading: boolean = false;
   reloadStartTime: number = 0;
   lastFireTime: number = 0;

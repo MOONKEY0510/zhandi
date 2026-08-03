@@ -1,0 +1,12 @@
+*
+!eslint.config.js
+!vitest.config.ts
+!.prettierrc.json
+!.prettierignore
+!src/config
+!src/config/**
+!src/core
+!src/core/**
+!src/performance/PerformanceMonitor.ts
+!src/performance/PerformanceMonitor.test.ts
+!src/performance/PerformancePanel.ts

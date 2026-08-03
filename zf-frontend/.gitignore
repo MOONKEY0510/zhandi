@@ -9,8 +9,11 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-check
 dist-ssr
 *.local
+*.timestamp-*.mjs
+.workbuddy/
 
 # Editor directories and files
 .vscode/*

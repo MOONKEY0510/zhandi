@@ -1,28 +1,29 @@
 import * as THREE from 'three';
-import type { PhysicsWorld } from '../physics/PhysicsWorld';
+import { DEFAULT_GAME_CONFIG } from '../config';
 import type { InputState } from '../input/InputManager';
+import type { PhysicsWorld } from '../physics/PhysicsWorld';
 
-const PLAYER_HEIGHT = 1.7;
-const CROUCH_HEIGHT = 1.0;
-const PLAYER_RADIUS = 0.4;
-const WALK_SPEED = 5.0;
-const SPRINT_SPEED = 8.0;
-const CROUCH_SPEED = 2.5;
-const JUMP_FORCE = 7.0;
-const GROUND_FRICTION = 0.85;
-const AIR_CONTROL = 0.3;
-const MOUSE_SENSITIVITY = 0.002;
-const ACCELERATION = 12.0;
+const PLAYER_CONFIG = DEFAULT_GAME_CONFIG.player;
+const PLAYER_HEIGHT = PLAYER_CONFIG.height;
+const CROUCH_HEIGHT = PLAYER_CONFIG.crouchHeight;
+const PLAYER_RADIUS = PLAYER_CONFIG.radius;
+const WALK_SPEED = PLAYER_CONFIG.walkSpeed;
+const SPRINT_SPEED = PLAYER_CONFIG.sprintSpeed;
+const CROUCH_SPEED = PLAYER_CONFIG.crouchSpeed;
+const JUMP_FORCE = PLAYER_CONFIG.jumpForce;
+const AIR_CONTROL = PLAYER_CONFIG.airControl;
+const MOUSE_SENSITIVITY = PLAYER_CONFIG.mouseSensitivity;
+const ACCELERATION = PLAYER_CONFIG.acceleration;
 
 // 体力系统
-const MAX_STAMINA = 100;
-const STAMINA_DRAIN_RATE = 25;
-const STAMINA_REGEN_RATE = 15;
-const STAMINA_MIN_TO_SPRINT = 20;
+const MAX_STAMINA = PLAYER_CONFIG.maxStamina;
+const STAMINA_DRAIN_RATE = PLAYER_CONFIG.staminaDrainRate;
+const STAMINA_REGEN_RATE = PLAYER_CONFIG.staminaRegenRate;
+const STAMINA_MIN_TO_SPRINT = PLAYER_CONFIG.staminaMinToSprint;
 
 // 坠落伤害
-const FALL_DAMAGE_THRESHOLD = 8;
-const FALL_DAMAGE_MULTIPLIER = 5;
+const FALL_DAMAGE_THRESHOLD = PLAYER_CONFIG.fallDamageThreshold;
+const FALL_DAMAGE_MULTIPLIER = PLAYER_CONFIG.fallDamageMultiplier;
 
 // 头部摆动
 const BOB_FREQUENCY = 10;
@@ -30,10 +31,10 @@ const BOB_AMPLITUDE_X = 0.03;
 const BOB_AMPLITUDE_Y = 0.05;
 
 // FOV
-const BASE_FOV = 75;
-const SPRINT_FOV = 85;
-const ADS_FOV = 55;
-const FOV_LERP_SPEED = 8;
+const BASE_FOV = PLAYER_CONFIG.baseFov;
+const SPRINT_FOV = PLAYER_CONFIG.sprintFov;
+const ADS_FOV = PLAYER_CONFIG.adsFov;
+const FOV_LERP_SPEED = PLAYER_CONFIG.fovLerpSpeed;
 
 export class PlayerController {
   private physicsWorld: PhysicsWorld;

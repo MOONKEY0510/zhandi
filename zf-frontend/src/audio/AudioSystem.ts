@@ -328,7 +328,7 @@ export class AudioSystem {
   }
 
   stopAll(): void {
-    for (const [id, source] of this.activeSources) {
+    for (const source of this.activeSources.values()) {
       source.stop();
     }
     this.activeSources.clear();

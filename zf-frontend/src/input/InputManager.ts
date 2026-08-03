@@ -24,6 +24,7 @@ export class InputManager {
   private keys: Set<string> = new Set();
   private mouseMovement = { x: 0, y: 0 };
   private pointerLocked = false;
+  private initialized = false;
 
   private weaponSwitchCallbacks: WeaponSwitchCallback[] = [];
   private reloadPressedCallbacks: ReloadCallback[] = [];
@@ -117,6 +118,9 @@ export class InputManager {
   private onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
 
   init(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+
     document.addEventListener('keydown', this.onKeyDown);
     document.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('mousemove', this.onMouseMove);
@@ -172,6 +176,9 @@ export class InputManager {
   }
 
   dispose(): void {
+    if (!this.initialized) return;
+    this.initialized = false;
+
     document.removeEventListener('keydown', this.onKeyDown);
     document.removeEventListener('keyup', this.onKeyUp);
     document.removeEventListener('mousemove', this.onMouseMove);
