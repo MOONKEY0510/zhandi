@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { resolveGameConfig, validateGameConfig } from '../config';
-import { FixedStepClock, GameState, GameStateMachine } from '../core';
+import { EventBus, FixedStepClock, GameState, GameStateMachine } from '../core';
 import { gameplayRandom, useGameplaySeed, useSystemRandom } from '../core/Random';
 import { PerformanceMonitor, PerformancePanel } from '../performance';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
@@ -24,7 +24,9 @@ import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
 import { VehicleSystem, VehicleType } from '../vehicle/VehicleSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
+import type { GameEvents } from './GameEvents';
 import { GameMode, GameModeType } from './GameMode';
+import { ConquestPresenter } from './ConquestPresenter';
 import { AchievementSystem, AchievementType } from './AchievementSystem';
 import { ConquestMode, TeamId } from './ConquestMode';
 
@@ -51,6 +53,7 @@ export class GameScene {
   private container: HTMLElement;
   private readonly config = resolveGameConfig();
   private readonly stateMachine = new GameStateMachine();
+  private readonly events = new EventBus<GameEvents>();
   private readonly simulationClock: FixedStepClock;
   private readonly performanceMonitor: PerformanceMonitor;
   private readonly performancePanel: PerformancePanel;
@@ -107,6 +110,7 @@ export class GameScene {
 
   // 征服模式
   private conquestMode!: ConquestMode;
+  private conquestPresenter!: ConquestPresenter;
   private controlPointMeshes: THREE.Mesh[] = [];
 
   // 环境物体
@@ -194,6 +198,7 @@ export class GameScene {
     this.performanceMonitor = new PerformanceMonitor(this.config.performance.sampleWindowSize);
     this.performancePanel = new PerformancePanel(this.performanceMonitor);
     this.performancePanel.setVisible(this.config.benchmark.enabled);
+    this.setupGameEvents();
 
     this.scene.add(this.camera);
     this.inputManager = new InputManager();
@@ -203,6 +208,28 @@ export class GameScene {
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+  }
+
+  private setupGameEvents(): void {
+    this.events.on('ui:message', ({ text, time }) => {
+      this.hud?.addKillMessage(text, time);
+    });
+    this.events.on('combat:kill', ({ label, headshot, victimTeam, time }) => {
+      this.killCount++;
+      this.events.emit('ui:message', { text: label, time });
+      this.conquestMode?.onAIDeath(victimTeam);
+      this.gameMode?.addKill(this.playerId, 'bot');
+      this.achievementSystem?.updateProgress(this.playerId, AchievementType.KILLS, 1);
+      if (headshot) this.achievementSystem?.updateProgress(this.playerId, AchievementType.HEADSHOTS, 1);
+    });
+    this.events.on('player:death', ({ team }) => {
+      this.deathCount++;
+      this.conquestMode?.onPlayerDeath(team);
+    });
+    this.events.on('round:end', ({ winnerName, time }) => {
+      this.events.emit('ui:message', { text: `游戏结束！${winnerName} 获胜！`, time });
+      if (this.stateMachine.is(GameState.PLAYING)) this.stateMachine.transition(GameState.ROUND_END);
+    });
   }
 
   async init(): Promise<void> {
@@ -307,6 +334,11 @@ export class GameScene {
       axisSpawn,
       alliesSpawn,
       this.conquestMode.playerTeam,
+    );
+    this.conquestPresenter = new ConquestPresenter(
+      this.conquestMode,
+      this.healthSystem,
+      this.aiSystem.bots,
     );
     this.setupAIHealthBars();
     this.setupAIFireCallback();
@@ -544,37 +576,16 @@ export class GameScene {
   private updateConquestMode(dt: number, currentTime: number): void {
     if (this.conquestMode.isGameOver) return;
 
-    // 收集所有实体位置（玩家 + AI）
-    const entities: { position: THREE.Vector3; team: TeamId }[] = [];
-
-    // 玩家
-    const playerPos = this.player?.getPosition();
-    if (playerPos && !this.healthSystem.isDead) {
-      entities.push({
-        position: new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z),
-        team: this.conquestMode.playerTeam,
-      });
-    }
-
-    // AI
-    for (const bot of this.aiSystem.bots) {
-      if (bot.state !== 'dead') {
-        entities.push({
-          position: bot.mesh.position.clone(),
-          team: bot.team,
-        });
-      }
-    }
-
-    this.conquestMode.update(dt, entities);
+    this.conquestPresenter.update(dt, this.player?.getPosition() ?? null);
 
     // 检查游戏结束
-    if (this.conquestMode.isGameOver) {
+    if (this.conquestMode.isGameOver && this.conquestMode.winner) {
       const winnerName = this.conquestMode.winner === TeamId.AXIS ? '德军' : '苏军';
-      this.hud.addKillMessage(`游戏结束！${winnerName} 获胜！`, currentTime);
-      if (this.stateMachine.is(GameState.PLAYING)) {
-        this.stateMachine.transition(GameState.ROUND_END);
-      }
+      this.events.emit('round:end', {
+        winner: this.conquestMode.winner,
+        winnerName,
+        time: currentTime,
+      });
     }
   }
 
@@ -1047,21 +1058,24 @@ export class GameScene {
       this.spawnDamageNumber(hitPoint, damage, hitInfo.isHeadshot || false);
     }
 
+    this.events.emit('combat:hit', {
+      damage,
+      headshot: hitInfo.isHeadshot || false,
+      point: hitPoint.clone(),
+      time: currentTime,
+    });
+
     if (killed) {
-      this.killCount++;
       const weaponName = this.weaponSystem.getCurrentWeapon().config.name;
       const partLabel = hitInfo.isHeadshot ? '爆头' : '击杀';
-      this.hud.addKillMessage(`${weaponName} ${partLabel} AI Bot`, currentTime);
+      this.events.emit('combat:kill', {
+        source: 'weapon',
+        label: `${weaponName} ${partLabel} AI Bot`,
+        headshot: hitInfo.isHeadshot || false,
+        victimTeam: hitBot.team,
+        time: currentTime,
+      });
       this.audioSystem.play(SoundType.DEATH, hitBot.mesh.position);
-
-      // 游戏模式记分
-      this.gameMode.addKill(this.playerId, 'bot');
-
-      // 成就追踪
-      this.achievementSystem.updateProgress(this.playerId, AchievementType.KILLS, 1);
-      if (hitInfo.isHeadshot) {
-        this.achievementSystem.updateProgress(this.playerId, AchievementType.HEADSHOTS, 1);
-      }
 
       // 检查成就解锁
       const unlocked = this.achievementSystem.getPlayerAchievements(this.playerId).filter(a => a.unlocked);
@@ -1091,10 +1105,13 @@ export class GameScene {
           const damage = equip.config.damage * Math.max(0.2, 1 - dist / equip.config.radius);
           const killed = bot.takeDamage(damage, bot.mesh.position, currentTime);
           if (killed) {
-            this.killCount++;
-            this.hud.addKillMessage(`${equip.config.name} 击杀 AI Bot`, currentTime);
-            this.gameMode.addKill(this.playerId, 'bot');
-            this.achievementSystem.updateProgress(this.playerId, AchievementType.KILLS, 1);
+            this.events.emit('combat:kill', {
+              source: 'equipment',
+              label: `${equip.config.name} 击杀 AI Bot`,
+              headshot: false,
+              victimTeam: bot.team,
+              time: currentTime,
+            });
           }
         }
       }
@@ -1399,14 +1416,11 @@ export class GameScene {
   // ====== AI 攻击（旧逻辑已由 setupAIFireCallback 替代）=====
 
   private handlePlayerDeath(currentTime: number): void {
-    this.deathCount++;
     this.respawnSystem.recordDeath(currentTime);
     this.audioSystem.play(SoundType.DEATH, this.camera.position);
-    this.hud.addKillMessage('你被击杀了', currentTime);
+    this.events.emit('ui:message', { text: '你被击杀了', time: currentTime });
+    this.events.emit('player:death', { team: this.conquestMode.playerTeam, time: currentTime });
     if (this.deathOverlay) this.deathOverlay.style.display = 'flex';
-
-    // 征服模式：扣除兵力值
-    this.conquestMode.onPlayerDeath(this.conquestMode.playerTeam);
   }
 
   private handleRespawn(currentTime: number): void {
@@ -1616,8 +1630,9 @@ export class GameScene {
     this.updateConquestMode(dt, time);
     this.updateControlPointVisuals();
 
-    const tickets = this.conquestMode.getTickets();
-    const cpStatus = this.conquestMode.getControlPointStatus();
+    const conquestHud = this.conquestPresenter.getHudState();
+    const tickets = conquestHud.tickets;
+    const cpStatus = conquestHud.controlPoints;
 
     this.hud.update(
       {
@@ -1715,6 +1730,7 @@ export class GameScene {
     this.equipmentSystem?.dispose();
     this.mapManager?.dispose();
     this.performancePanel.dispose();
+    this.events.clear();
     this.renderer.dispose();
   }
 }

@@ -43,10 +43,14 @@ export class FixedStepClock {
     this.droppedTimeSeconds += elapsedSeconds - clampedElapsed;
     this.accumulatorSeconds += clampedElapsed;
 
+    const stepEpsilon = this.options.stepSeconds * 1e-9;
     let steps = 0;
-    while (this.accumulatorSeconds >= this.options.stepSeconds && steps < this.options.maxSubSteps) {
+    while (
+      this.accumulatorSeconds + stepEpsilon >= this.options.stepSeconds &&
+      steps < this.options.maxSubSteps
+    ) {
       simulate(this.options.stepSeconds);
-      this.accumulatorSeconds -= this.options.stepSeconds;
+      this.accumulatorSeconds = Math.max(0, this.accumulatorSeconds - this.options.stepSeconds);
       steps++;
     }
 

@@ -31,6 +31,20 @@ describe('FixedStepClock', () => {
     expect(result.alpha).toBeLessThan(1);
   });
 
+  it.each([30, 60, 120])('produces the same one-second simulation at %i FPS', (renderFps) => {
+    const clock = new FixedStepClock({ stepSeconds: 1 / 60, maxSubSteps: 5 });
+    let simulatedSeconds = 0;
+    let timeMs = 0;
+    clock.advance(timeMs, (dt) => (simulatedSeconds += dt));
+
+    for (let frame = 0; frame < renderFps; frame++) {
+      timeMs = ((frame + 1) / renderFps) * 1_000;
+      clock.advance(timeMs, (dt) => (simulatedSeconds += dt));
+    }
+
+    expect(simulatedSeconds).toBeCloseTo(1, 8);
+  });
+
   it('resets accumulated time when resuming from pause', () => {
     const clock = new FixedStepClock();
     const simulate = vi.fn();
