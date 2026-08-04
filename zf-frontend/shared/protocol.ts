@@ -27,6 +27,15 @@ export const SERVER_FIRE_COOLDOWN_MS = 120 as const;
 export const PLAYER_PITCH_CLAMP = Math.PI / 2 - 0.01;
 /** 地图边界（米），超界位置钳制 */
 export const MAP_BOUND = 160 as const;
+/** 玩家眼睛高度（米），弹丸出生点 y 偏移 */
+export const PLAYER_EYE_HEIGHT = 1.6 as const;
+/** 服务端枪弹参数（统一步枪，后续按装备细分） */
+export const BULLET_SPEED_MPS = 60 as const;
+export const BULLET_DAMAGE = 25 as const;
+export const BULLET_HIT_RADIUS = 0.6 as const;
+export const BULLET_HEIGHT_HALF = 1.2 as const;
+export const BULLET_MAX_RANGE = 200 as const;
+export const BULLET_LIFE_MS = 4000 as const;
 
 export type MessageKind =
   | 'hello'

@@ -10,6 +10,7 @@ import {
   TICK_RATE_HZ,
   SNAPSHOT_EVERY_TICKS,
   INPUT_RATE_LIMIT_PER_SECOND,
+  PLAYER_EYE_HEIGHT,
   type NetworkMessage,
   type PlayerInput,
   type JoinAck,
@@ -20,6 +21,7 @@ import { computeVisiblePlayers } from '../shared/interest.ts';
 import { SimClock } from './SimClock.ts';
 import { RoomManager } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
+import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
 
 export interface ServerAppOptions {
   port?: number;
@@ -52,6 +54,8 @@ const SPAWN = [
 export class ServerApp {
   readonly roomManager = new RoomManager();
   readonly clock = new SimClock({ tickRateHz: TICK_RATE_HZ, snapshotEveryTicks: SNAPSHOT_EVERY_TICKS });
+  /** 服务端权威弹道与命中裁决 */
+  readonly projectiles = new ProjectileSim();
   private wss: WebSocketServer | null = null;
   private connections = new Map<WebSocket, Connection>();
   private readonly options: Required<Pick<ServerAppOptions, 'defaultRoomId'>> & ServerAppOptions;
@@ -242,7 +246,7 @@ export class ServerApp {
     conn.pendingInput = msg;
   }
 
-  /** 每 tick：把最新输入应用到玩家模拟 */
+  /** 每 tick：把最新输入应用到玩家模拟，推进弹道并裁决命中 */
   private stepSimulation(tick: number, deltaSeconds: number, shouldSnapshot: boolean): void {
     // 快照广播前应用输入（输入在上一 tick 到达，本 tick 生效）
     for (const conn of this.connections.values()) {
@@ -261,7 +265,17 @@ export class ServerApp {
         const result = conn.sim.step(input, deltaSeconds, this.clock.nowMs());
         if (result.corrected) this.totalCorrections += 1;
         if (result.fired) {
-          // 阶段 8 后续：子弹实体/命中判定在服务器裁决；当前先广播开火事件占位
+          // 服务端裁决射速通过 → 生成弹丸（起点 = 眼睛高度，方向 = 朝向）
+          const s = conn.sim.state;
+          this.projectiles.spawn({
+            ownerId: conn.playerId!,
+            team: s.team,
+            x: s.x,
+            y: s.y + PLAYER_EYE_HEIGHT,
+            z: s.z,
+            yaw: s.yaw,
+            pitch: s.pitch,
+          });
         }
       } else {
         // 无输入：惯性停止（速度由钳制模型自然归零）
@@ -269,6 +283,20 @@ export class ServerApp {
       }
       conn.pendingInput = undefined;
     }
+
+    // 弹道推进 + 命中裁决（伤害由服务器裁决，客户端无法伪造击杀）
+    const targets: ProjectileTarget[] = [];
+    for (const conn of this.connections.values()) {
+      if (!conn.sim) continue;
+      const s = conn.sim.state;
+      targets.push({ id: s.id, team: s.team, x: s.x, y: s.y, z: s.z, alive: s.alive });
+    }
+    this.projectiles.step(deltaSeconds, targets, (hit) => {
+      const targetConn = this.findConnection(hit.targetId);
+      if (targetConn?.sim) {
+        targetConn.sim.takeDamage(hit.damage);
+      }
+    });
 
     if (shouldSnapshot) {
       this.broadcastSnapshots(tick);
