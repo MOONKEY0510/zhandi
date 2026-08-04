@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { NetClient, type RawTransport } from './NetClient.ts';
 import { ClientPrediction } from './ClientPrediction.ts';
 import { encodeMessage, decodeMessage } from '../../shared/codec.ts';
@@ -155,5 +155,95 @@ describe('NetClient（阶段 8 协议客户端）', () => {
     await client.connect();
     client.disconnect();
     expect(transport.closed).toBe(true);
+  });
+
+  it('断线后自动重连：重建传输 → 重新握手 → 恢复原房间', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', {
+        pingIntervalMs: 0,
+        maxReconnects: 3,
+        reconnectBaseDelayMs: 100,
+      });
+      await client.connect();
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      client.joinRoom('room-1');
+      transport.inject({ kind: 'join_ack', roomId: 'room-1', playerId: 'p1', team: 0, slot: 1, resumed: false });
+      const helloCount = transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length;
+      const joinCount = transport.sent.filter((b) => decodeMessage(b).kind === 'join').length;
+      expect(helloCount).toBe(1);
+      expect(joinCount).toBe(1);
+
+      // 断线 → 调度重连（退避 100ms）
+      const disconnects: string[] = [];
+      client.onDisconnect = (r) => disconnects.push(r);
+      transport.close();
+      expect(client.getStats().connected).toBe(false);
+      expect(disconnects).toEqual(['closed']);
+      expect(transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length).toBe(1); // 尚未重连
+
+      // 推进退避时间 → 重连：重新 hello + 自动恢复房间
+      await vi.advanceTimersByTimeAsync(100);
+      const kinds = transport.sent.map((b) => decodeMessage(b).kind);
+      expect(kinds.filter((k) => k === 'hello').length).toBe(2);
+      expect(kinds.filter((k) => k === 'join').length).toBe(2);
+      const lastJoin = decodeMessage(transport.sent[transport.sent.length - 1]);
+      expect(lastJoin.kind).toBe('join');
+      if (lastJoin.kind === 'join') expect(lastJoin.roomId).toBe('room-1');
+
+      // 重连握手成功 → 恢复连接，重连计数复位
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 2 });
+      expect(client.getStats().connected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('主动 disconnect 不触发重连', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', {
+        pingIntervalMs: 0,
+        maxReconnects: 3,
+        reconnectBaseDelayMs: 100,
+      });
+      await client.connect();
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      const disconnects: string[] = [];
+      client.onDisconnect = (r) => disconnects.push(r);
+      client.disconnect();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(disconnects).toEqual([]);
+      expect(transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重连次数耗尽触发 onDisconnect(max_reconnects)', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', {
+        pingIntervalMs: 0,
+        maxReconnects: 1,
+        reconnectBaseDelayMs: 100,
+      });
+      await client.connect();
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      const disconnects: string[] = [];
+      client.onDisconnect = (r) => disconnects.push(r);
+      transport.close(); // 第一次断线 → 调度第 1 次重连
+      await vi.advanceTimersByTimeAsync(100);
+      expect(transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length).toBe(2); // 已重连
+      transport.close(); // 重连后再次断线 → 次数已耗尽
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(disconnects).toEqual(['closed', 'closed', 'max_reconnects']);
+      expect(transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length).toBe(2); // 不再重连
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -63,8 +63,10 @@ export class WebSocketTransport implements RawTransport {
 }
 
 export interface NetClientOptions {
-  /** 断线重连尝试次数 */
+  /** 断线重连尝试次数（0 = 不重连） */
   maxReconnects?: number;
+  /** 重连基础退避延迟 ms（实际延迟 = base × 2^attempts） */
+  reconnectBaseDelayMs?: number;
   /** 网络模拟（联调/演示用），包装在真实传输外 */
   simulator?: NetSimulator;
   /** ping 周期 ms */
@@ -89,9 +91,13 @@ export interface NetClientStats {
 
 export class NetClient {
   private transport: RawTransport;
+  /** 传输工厂：重连时重建连接（WebSocket 断线后不可复用） */
+  private transportFactory: () => RawTransport;
   private readonly playerId: string;
   private readonly displayName: string;
-  private readonly options: Required<Pick<NetClientOptions, 'maxReconnects' | 'pingIntervalMs'>>;
+  private readonly options: Required<
+    Pick<NetClientOptions, 'maxReconnects' | 'pingIntervalMs' | 'reconnectBaseDelayMs'>
+  >;
   private readonly simulator: NetSimulator | null;
   private readonly prediction: ClientPrediction | null;
 
@@ -100,6 +106,10 @@ export class NetClient {
   private connected = false;
   private roomId: string | null = null;
   private phase: RoomState['phase'] | null = null;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualClose = false;
+  private pingTimer: ReturnType<typeof setTimeout> | null = null;
 
   private rttSamples: number[] = [];
   private lastPingAt = 0;
@@ -121,41 +131,57 @@ export class NetClient {
     this.options = {
       maxReconnects: options.maxReconnects ?? 3,
       pingIntervalMs: options.pingIntervalMs ?? 1000,
+      reconnectBaseDelayMs: options.reconnectBaseDelayMs ?? 500,
     };
     this.simulator = options.simulator ?? null;
     this.prediction = options.prediction ?? null;
 
-    const raw = new WebSocketTransport(url);
-    if (this.simulator) {
-      // 模拟器包装出站方向：客户端发送 → 模拟延迟/丢包 → 真实 WebSocket
-      this.simulator.onReceive = (bytes) => raw.send(bytes);
-      this.transport = {
-        send: (bytes) => this.simulator!.send(bytes),
-        onMessage: (cb) => raw.onMessage(cb),
-        onClose: (cb) => raw.onClose(cb),
-        close: () => raw.close(),
-      };
-    } else {
-      this.transport = raw;
-    }
+    this.transportFactory = () => {
+      const raw = new WebSocketTransport(url);
+      if (this.simulator) {
+        // 模拟器包装出站方向：客户端发送 → 模拟延迟/丢包 → 真实 WebSocket
+        this.simulator.onReceive = (bytes) => raw.send(bytes);
+        return {
+          send: (bytes) => this.simulator!.send(bytes),
+          onMessage: (cb) => raw.onMessage(cb),
+          onClose: (cb) => raw.onClose(cb),
+          close: () => raw.close(),
+        };
+      }
+      return raw;
+    };
+    this.transport = this.transportFactory();
   }
 
   /** 供测试注入假传输（绕过 WebSocket） */
   static withTransport(transport: RawTransport, playerId: string, displayName: string, options: NetClientOptions = {}): NetClient {
     const client = new NetClient('ws://fake', playerId, displayName, options);
+    client.transportFactory = () => transport;
     client.transport = transport;
     return client;
   }
 
   async connect(): Promise<void> {
+    this.manualClose = false;
+    await this.connectTransport();
+    this.sendHello();
+    this.startPing();
+  }
+
+  /** 建立传输并绑定消息/断线回调 */
+  private async connectTransport(): Promise<void> {
     await (this.transport as WebSocketTransport).connect?.();
     this.transport.onMessage((bytes) => this.dispatch(bytes));
     this.transport.onClose((reason) => {
+      if (this.manualClose) return;
       this.connected = false;
       this.onDisconnect?.(reason);
+      this.scheduleReconnect();
     });
+  }
+
+  private sendHello(): void {
     this.send({ kind: 'hello', protocolVersion: PROTOCOL_VERSION, playerId: this.playerId, displayName: this.displayName });
-    this.startPing();
   }
 
   joinRoom(roomId: string): void {
@@ -195,8 +221,37 @@ export class NetClient {
   }
 
   disconnect(): void {
+    this.manualClose = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.transport.close();
     this.connected = false;
+  }
+
+  /** 断线重连：指数退避，重建传输 → 重新握手 → 恢复原房间（服务端按 playerId 恢复战局） */
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return; // 已有重连在调度中
+    if (this.reconnectAttempts >= this.options.maxReconnects) {
+      this.onDisconnect?.('max_reconnects');
+      return;
+    }
+    const delay = this.options.reconnectBaseDelayMs * 2 ** this.reconnectAttempts;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnect();
+    }, delay);
+  }
+
+  private async reconnect(): Promise<void> {
+    this.reconnectAttempts += 1;
+    this.transport = this.transportFactory();
+    await this.connectTransport();
+    this.sendHello();
+    if (this.roomId) {
+      this.send({ kind: 'join', roomId: this.roomId });
+    }
   }
 
   /** 供测试：推进一次插值（渲染时间 = 最新快照 - 默认延迟） */
@@ -220,6 +275,7 @@ export class NetClient {
     switch (msg.kind) {
       case 'hello_ack':
         this.connected = true;
+        this.reconnectAttempts = 0; // 握手成功：重连计数复位
         break;
       case 'join_ack':
         this.roomId = msg.roomId;
@@ -273,13 +329,14 @@ export class NetClient {
   }
 
   private startPing(): void {
+    if (this.pingTimer) clearTimeout(this.pingTimer);
     const loop = (): void => {
       if (!this.connected) return;
       this.lastPingClientTime = this.now();
       this.send({ kind: 'ping', clientTime: this.lastPingClientTime });
-      setTimeout(loop, this.options.pingIntervalMs);
+      this.pingTimer = setTimeout(loop, this.options.pingIntervalMs);
     };
-    setTimeout(loop, this.options.pingIntervalMs);
+    this.pingTimer = setTimeout(loop, this.options.pingIntervalMs);
   }
 
   private now(): number {
