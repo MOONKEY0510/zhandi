@@ -1,43 +1,35 @@
-import { AssetLoader } from './AssetLoader';
+import { AssetLoader, type AssetLoaderStats } from './AssetLoader';
+import { AssetLoadStage, AssetManifest, AssetType, type AssetManifestEntry } from './AssetManifest';
 
-export interface AssetConfig {
-  models: string[];
-  textures: string[];
-  sounds: string[];
+export interface AssetStageResult {
+  stage: AssetLoadStage;
+  loadedIds: string[];
+  budgetBytes: number;
+  stats: AssetLoaderStats;
 }
 
 export class AssetPipeline {
-  private loader: AssetLoader;
-  private config: AssetConfig;
+  private readonly loadedIds = new Set<string>();
 
-  constructor(config: AssetConfig) {
-    this.loader = new AssetLoader();
-    this.config = config;
+  constructor(
+    private readonly manifest: AssetManifest,
+    private readonly loader = new AssetLoader(),
+  ) {}
+
+  async loadStage(stage: AssetLoadStage): Promise<AssetStageResult> {
+    const entries = this.manifest.getStage(stage).filter((entry) => !this.loadedIds.has(entry.id));
+    await Promise.all(entries.map((entry) => this.loadEntry(entry)));
+    entries.forEach((entry) => this.loadedIds.add(entry.id));
+    return {
+      stage,
+      loadedIds: entries.map((entry) => entry.id),
+      budgetBytes: this.manifest.getBudget(stage),
+      stats: this.loader.getStats(),
+    };
   }
 
-  async loadLevel(levelName: string): Promise<void> {
-    console.log(`Loading level: ${levelName}`);
-
-    const levelAssets = this.getLevelAssets(levelName);
-    await this.loader.preload(levelAssets);
-
-    console.log(`Level ${levelName} loaded. Cache size: ${this.loader.getCacheSize()}`);
-  }
-
-  private getLevelAssets(levelName: string): string[] {
-    const assets: string[] = [];
-
-    switch (levelName) {
-      case 'test':
-        assets.push(...this.config.models.slice(0, 5));
-        assets.push(...this.config.textures.slice(0, 5));
-        break;
-      default:
-        assets.push(...this.config.models);
-        assets.push(...this.config.textures);
-    }
-
-    return assets;
+  isLoaded(id: string): boolean {
+    return this.loadedIds.has(id);
   }
 
   getLoader(): AssetLoader {
@@ -46,5 +38,18 @@ export class AssetPipeline {
 
   dispose(): void {
     this.loader.dispose();
+    this.loadedIds.clear();
+  }
+
+  private async loadEntry(entry: AssetManifestEntry): Promise<void> {
+    if (entry.type === AssetType.MODEL) {
+      await this.loader.loadModel(entry.url);
+      return;
+    }
+    if (entry.type === AssetType.TEXTURE) {
+      await this.loader.loadTexture(entry.url);
+      return;
+    }
+    // 音频由阶段6的音频管线消费，阶段5只保留清单和预算。
   }
 }

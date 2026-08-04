@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BerlinRuins } from './BerlinRuins';
+import { buildMapFromDefinition, type BuiltMapData, type MapDefinition } from './MapDefinition';
 
 export interface SpawnPoint {
   position: THREE.Vector3;
@@ -10,6 +11,7 @@ export class MapManager {
   scene: THREE.Scene;
   currentMap: BerlinRuins | null = null;
   spawnPoints: SpawnPoint[] = [];
+  private builtDefinition: BuiltMapData | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -38,6 +40,12 @@ export class MapManager {
     }));
   }
 
+  loadDefinition(definition: MapDefinition): void {
+    this.dispose();
+    this.builtDefinition = buildMapFromDefinition(definition);
+    this.scene.add(this.builtDefinition.root);
+  }
+
   getSpawnPoints(): SpawnPoint[] {
     return this.spawnPoints;
   }
@@ -49,10 +57,22 @@ export class MapManager {
   }
 
   getCollisionObjects(): THREE.Object3D[] {
-    return this.currentMap?.getCollisionObjects() || [];
+    return this.builtDefinition?.collisionObjects ?? this.currentMap?.getCollisionObjects() ?? [];
+  }
+
+  getNavigationObjects() {
+    return this.builtDefinition?.navigationObjects ?? [];
+  }
+
+  getSoundZones() {
+    return this.builtDefinition?.soundZones ?? [];
   }
 
   dispose(): void {
+    if (this.builtDefinition) {
+      this.scene.remove(this.builtDefinition.root);
+      this.builtDefinition = null;
+    }
     this.currentMap?.dispose();
     this.currentMap = null;
     this.spawnPoints = [];
