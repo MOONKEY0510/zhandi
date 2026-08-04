@@ -3,6 +3,8 @@ import { gameplayRandom } from '../core/Random';
 import { TeamId } from '../game/ConquestMode';
 import { AIPerception } from './AIPerception';
 import { getAILodBudget } from './AILod';
+import { evaluateAIVisibility, type SmokeVolume } from './AIVisibility';
+import { decideTacticalAction, type AITacticalAction, type AITacticalDecision } from './SquadTactics';
 
 export enum AIState {
   PATROL = 'patrol',
@@ -82,6 +84,9 @@ export class AIBot {
   difficulty: AIDifficulty;
   config: DifficultyConfig;
   team: TeamId = TeamId.NEUTRAL;
+  squadRole: 'leader' | 'assault' | 'support' | 'medic' = 'assault';
+  tacticalDecision: AITacticalDecision = { action: 'advance', reason: '初始化战术状态' };
+  lastTargetVisible = false;
 
   health: number = 100;
   maxHealth: number = 100;
@@ -120,6 +125,7 @@ export class AIBot {
   private stuckTimer = 0;
   private lastPosition = new THREE.Vector3();
   private readonly perception = new AIPerception();
+  private visibilityEvaluator: ((observer: THREE.Vector3, target: THREE.Vector3, maxDistance: number) => boolean) | null = null;
   private nextPerceptionAt = 0;
   private nextDecisionAt = 0;
 
@@ -132,6 +138,10 @@ export class AIBot {
   private stateTimer = 0;
   private reloadEndTime = 0;
   private isReloading = false;
+
+  get isReloadingWeapon(): boolean {
+    return this.isReloading;
+  }
   private targetAcquiredTime = 0;
   private hasAcquiredTarget = false;
 
@@ -168,6 +178,25 @@ export class AIBot {
 
   static clearFireCallbacks(): void {
     AIBot.fireCallbacks = [];
+  }
+
+  setVisibilityEvaluator(
+    evaluator: (observer: THREE.Vector3, target: THREE.Vector3, maxDistance: number) => boolean,
+  ): void {
+    this.visibilityEvaluator = evaluator;
+  }
+
+  applyTacticalDecision(decision: AITacticalDecision): void {
+    this.tacticalDecision = decision;
+    const actions: Record<AITacticalAction, AIState> = {
+      follow: AIState.PATROL,
+      focus_fire: AIState.ATTACK,
+      suppress: AIState.ATTACK,
+      advance: AIState.CHASE,
+      retreat: AIState.COVER,
+      revive: AIState.CHASE,
+    };
+    if (this.state !== AIState.DEAD) this.state = actions[decision.action];
   }
 
   // 头顶标识
@@ -530,7 +559,10 @@ export class AIBot {
     }
 
     const distanceToPlayer = this.mesh.position.distanceTo(playerPosition);
-    const visible = distanceToPlayer <= this.detectionRange;
+    const visible = this.visibilityEvaluator
+      ? this.visibilityEvaluator(this.mesh.position, playerPosition, this.detectionRange)
+      : distanceToPlayer <= this.detectionRange;
+    this.lastTargetVisible = visible;
     const lod = getAILodBudget(distanceToPlayer, visible);
     this.mesh.visible = lod.animate || visible;
 
@@ -556,17 +588,17 @@ export class AIBot {
       case AIState.PATROL:
         this.patrol(deltaTime);
         // 只有敌方 AI 才检测玩家
-        if (this.team !== AIBot.playerTeam && distanceToPlayer < this.detectionRange) {
+        if (this.team !== AIBot.playerTeam && visible) {
           this.setTarget(this.scene.getObjectByName('player') ?? null);
         }
         break;
 
       case AIState.CHASE:
-        this.chase(deltaTime, currentTime, playerPosition, distanceToPlayer);
+        this.chase(deltaTime, currentTime, playerPosition, distanceToPlayer, visible);
         break;
 
       case AIState.ATTACK:
-        this.attack(deltaTime, currentTime, playerPosition, distanceToPlayer);
+        this.attack(deltaTime, currentTime, playerPosition, distanceToPlayer, visible);
         break;
 
       case AIState.COVER:
@@ -605,8 +637,19 @@ export class AIBot {
     this.mesh.lookAt(target);
   }
 
-  private chase(deltaTime: number, _currentTime: number, playerPosition: THREE.Vector3, distanceToPlayer: number): void {
+  private chase(
+    deltaTime: number,
+    _currentTime: number,
+    playerPosition: THREE.Vector3,
+    distanceToPlayer: number,
+    visible: boolean,
+  ): void {
     if (!this.target) return;
+    if (!visible) {
+      this.target = null;
+      this.state = AIState.PATROL;
+      return;
+    }
     this.isMoving = true;
 
     if (distanceToPlayer <= this.attackRange) {
@@ -628,8 +671,20 @@ export class AIBot {
     this.mesh.lookAt(playerPosition);
   }
 
-  private attack(deltaTime: number, currentTime: number, playerPosition: THREE.Vector3, distanceToPlayer: number): void {
+  private attack(
+    deltaTime: number,
+    currentTime: number,
+    playerPosition: THREE.Vector3,
+    distanceToPlayer: number,
+    visible: boolean,
+  ): void {
     if (!this.target) return;
+    if (!visible) {
+      this.target = null;
+      this.hasAcquiredTarget = false;
+      this.state = AIState.PATROL;
+      return;
+    }
     this.isMoving = false;
 
     // 超出攻击范围 → 追击
@@ -825,6 +880,9 @@ export class AIBot {
 
 export class AISystem {
   bots: AIBot[] = [];
+  private currentTime = 0;
+  private lastTacticalUpdate = 0;
+  private readonly tacticalLog: { botIndex: number; action: AITacticalAction; reason: string; time: number }[] = [];
 
   constructor(scene: THREE.Scene, count: number = 5) {
     this.spawnBots(scene, count);
@@ -855,7 +913,15 @@ export class AISystem {
       system.bots.push(new AIBot(scene, position, difficulty, TeamId.ALLIES));
     }
 
+    system.assignSquadRoles();
     return system;
+  }
+
+  private assignSquadRoles(): void {
+    const roles: AIBot['squadRole'][] = ['leader', 'assault', 'support', 'medic'];
+    this.bots.forEach((bot, index) => {
+      bot.squadRole = roles[index % roles.length];
+    });
   }
 
   // 计算 AI 生成位置
@@ -922,10 +988,70 @@ export class AISystem {
     return this.bots.filter(b => b.team === playerTeam);
   }
 
+  configureVisibility(
+    environmentObjects: readonly THREE.Object3D[],
+    getSmokeVolumes: (currentTime: number) => readonly SmokeVolume[],
+  ): void {
+    const raycaster = new THREE.Raycaster();
+    for (const bot of this.bots) {
+      bot.setVisibilityEvaluator((observer, target, maxDistance) => {
+        const direction = target.clone().sub(observer);
+        const distance = direction.length();
+        if (distance === 0) return true;
+        raycaster.set(observer, direction.normalize());
+        raycaster.far = Math.min(distance, maxDistance);
+        const occludedByWorld = raycaster.intersectObjects([...environmentObjects], true)
+          .some((hit) => hit.distance < distance - 0.25);
+        return evaluateAIVisibility(observer, target, {
+          maxDistance,
+          occludedByWorld,
+          smokeVolumes: getSmokeVolumes(this.currentTime),
+        }).visible;
+      });
+    }
+  }
+
   update(deltaTime: number, currentTime: number, playerPosition: THREE.Vector3): void {
+    this.currentTime = currentTime;
+    if (currentTime - this.lastTacticalUpdate >= 1_000) {
+      this.lastTacticalUpdate = currentTime;
+      this.updateSquadTactics(currentTime, playerPosition);
+    }
     for (const bot of this.bots) {
       bot.update(deltaTime, currentTime, playerPosition);
     }
+  }
+
+  getTacticalLog(): readonly { botIndex: number; action: AITacticalAction; reason: string; time: number }[] {
+    return this.tacticalLog;
+  }
+
+  private updateSquadTactics(currentTime: number, _playerPosition: THREE.Vector3): void {
+    for (let index = 0; index < this.bots.length; index++) {
+      const bot = this.bots[index];
+      if (bot.state === AIState.DEAD) continue;
+      const squadStart = Math.floor(index / 4) * 4;
+      const leader = this.bots[squadStart] ?? bot;
+      const downedAlly = this.bots
+        .filter((candidate) => candidate.team === bot.team && candidate.state === AIState.DEAD)
+        .reduce<number | null>((nearest, candidate) => {
+          const distance = bot.mesh.position.distanceTo(candidate.mesh.position);
+          return nearest === null || distance < nearest ? distance : nearest;
+        }, null);
+      const visibleEnemies = bot.team !== AIBot.playerTeam && bot.lastTargetVisible ? 1 : 0;
+      const decision = decideTacticalAction({
+        distanceToLeader: bot.mesh.position.distanceTo(leader.mesh.position),
+        visibleEnemies,
+        healthRatio: bot.health / bot.maxHealth,
+        ammoRatio: bot.isReloadingWeapon ? 0 : 1,
+        downedAllyDistance: downedAlly,
+        objectiveDistance: bot.mesh.position.distanceTo(new THREE.Vector3()),
+        role: bot.squadRole,
+      });
+      bot.applyTacticalDecision(decision);
+      this.tacticalLog.push({ botIndex: index, action: decision.action, reason: decision.reason, time: currentTime });
+    }
+    if (this.tacticalLog.length > 256) this.tacticalLog.splice(0, this.tacticalLog.length - 256);
   }
 
   getAllTargetableMeshes(): THREE.Object3D[] {

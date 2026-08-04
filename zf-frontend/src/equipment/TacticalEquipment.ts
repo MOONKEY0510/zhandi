@@ -366,6 +366,17 @@ export class EquipmentSystem {
     return this.activeEquipment;
   }
 
+  getActiveSmokeVolumes(currentTime: number): { center: THREE.Vector3; radius: number }[] {
+    return this.activeEquipment
+      .filter((equipment) => {
+        if (equipment.config.type !== EquipmentType.SMOKE_GRENADE || !equipment.isActive) return false;
+        const elapsed = (currentTime - equipment.activationTime) / 1000;
+        return elapsed >= equipment.config.fuseTime &&
+          elapsed < equipment.config.fuseTime + equipment.config.effectDuration;
+      })
+      .map((equipment) => ({ center: equipment.position.clone(), radius: equipment.config.radius }));
+  }
+
   dispose(): void {
     for (const equipment of this.activeEquipment) {
       equipment.cleanup(this.scene);

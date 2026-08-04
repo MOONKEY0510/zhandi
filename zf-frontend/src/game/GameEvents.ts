@@ -13,6 +13,7 @@ export interface GameEvents {
     label: string;
     headshot: boolean;
     victimTeam: TeamId;
+    victimId?: string;
     time: number;
   };
   'player:death': {

@@ -21,6 +21,7 @@ import { HealthSystem } from '../player/HealthSystem';
 import { RespawnSystem } from '../player/RespawnSystem';
 import type { SoldierClassDefinition } from '../player/SoldierClass';
 import { AISystem, AIBot } from '../ai/AIBot';
+import { AIStats } from '../ai/AIStats';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
@@ -87,6 +88,7 @@ export class GameScene {
 
   // AI
   private aiSystem!: AISystem;
+  private readonly aiStats = new AIStats();
 
   // 音频
   private audioSystem!: AudioSystem;
@@ -239,10 +241,11 @@ export class GameScene {
     this.events.on('ui:message', ({ text, time }) => {
       this.hud?.addKillMessage(text, time);
     });
-    this.events.on('combat:kill', ({ label, headshot, victimTeam, time }) => {
+    this.events.on('combat:kill', ({ label, headshot, victimTeam, victimId, time }) => {
       this.killCount++;
       this.events.emit('ui:message', { text: label, time });
       this.conquestMode?.onAIDeath(victimTeam);
+      if (victimId) this.aiStats.recordDeath(victimId);
       this.gameMode?.addKill(this.playerId, 'bot');
       this.achievementSystem?.updateProgress(this.playerId, AchievementType.KILLS, 1);
       if (headshot) this.achievementSystem?.updateProgress(this.playerId, AchievementType.HEADSHOTS, 1);
@@ -369,6 +372,7 @@ export class GameScene {
       this.healthSystem,
       this.aiSystem.bots,
     );
+    this.aiSystem.bots.forEach((_bot, index) => this.aiStats.register(`bot_${index}`, 30 + (index % 5) * 5));
     this.setupAIHealthBars();
     this.setupAIFireCallback();
 
@@ -380,6 +384,10 @@ export class GameScene {
 
     // 战术装备
     this.equipmentSystem = new EquipmentSystem(this.scene);
+    this.aiSystem.configureVisibility(
+      this.environmentObjects,
+      (currentTime) => this.equipmentSystem.getActiveSmokeVolumes(currentTime),
+    );
 
     // 载具
     this.vehicleSystem = new VehicleSystem(this.scene, this.physicsWorld.world);
@@ -1141,6 +1149,7 @@ export class GameScene {
         label: `${weaponName} ${partLabel} AI Bot`,
         headshot: hitInfo.isHeadshot || false,
         victimTeam: hitBot.team,
+        victimId: `bot_${this.aiSystem.bots.indexOf(hitBot)}`,
         time: currentTime,
       });
       this.audioSystem.play(SoundType.DEATH, hitBot.mesh.position);
@@ -1178,6 +1187,7 @@ export class GameScene {
               label: `${equip.config.name} 击杀 AI Bot`,
               headshot: false,
               victimTeam: bot.team,
+              victimId: `bot_${this.aiSystem.bots.indexOf(bot)}`,
               time: currentTime,
             });
           }
@@ -1534,16 +1544,23 @@ export class GameScene {
     if (playerStats) {
       players.push({
         id: this.playerId, name: '玩家', kills: this.killCount, deaths: this.deathCount,
-        assists: 0, score: playerStats.score, ping: 0, team: 'A',
+        assists: 0, score: playerStats.score, ping: 0, team: 'B',
       });
     }
 
     // AI bots
     for (let i = 0; i < this.aiSystem.bots.length; i++) {
       const bot = this.aiSystem.bots[i];
+      const stats = this.aiStats.get(`bot_${i}`);
       players.push({
-        id: `bot_${i}`, name: `AI Bot ${i + 1}`, kills: 0, deaths: bot.state === 'dead' ? 1 : 0,
-        assists: 0, score: 0, ping: 30 + Math.floor(gameplayRandom() * 50), team: 'B',
+        id: `bot_${i}`,
+        name: `AI Bot ${i + 1}`,
+        kills: stats.kills,
+        deaths: stats.deaths,
+        assists: stats.assists,
+        score: stats.score,
+        ping: stats.ping,
+        team: bot.team === TeamId.ALLIES ? 'B' : 'A',
       });
     }
 
