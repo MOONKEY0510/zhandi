@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { TeamId } from '../game/ConquestMode';
 import { Vehicle, VehicleSystem, VehicleType, VehicleDamagePart } from './VehicleSystem';
 
 describe('VehicleSystem（阶段 7 载具 P0）', () => {
@@ -112,5 +113,57 @@ describe('VehicleSystem（阶段 7 载具 P0）', () => {
     expect(vehicle.health).toBe(vehicle.config.health);
     expect(vehicle.ammo).toBe(vehicle.config.ammo);
     expect(vehicle.mesh.visible).toBe(true);
+  });
+
+  it('阵营：spawnVehicle 分配 team', () => {
+    const { scene, world } = createVehicle();
+    const system = new VehicleSystem(scene, world);
+    const jeep = system.spawnVehicle(VehicleType.JEEP, new THREE.Vector3(0, 1, 0), TeamId.ALLIES);
+    const tank = system.spawnVehicle(VehicleType.TANK, new THREE.Vector3(0, 1, 0), TeamId.AXIS);
+    expect(jeep.team).toBe(TeamId.ALLIES);
+    expect(tank.team).toBe(TeamId.AXIS);
+    expect(system.spawnVehicle(VehicleType.JEEP, new THREE.Vector3(0, 1, 0)).team).toBe(TeamId.NEUTRAL);
+  });
+
+  it('补给站：同阵营载具进入半径快速维修 + 补弹', () => {
+    const { scene, world, vehicle } = createVehicle(VehicleType.TANK);
+    vehicle.team = TeamId.ALLIES;
+    const system = new VehicleSystem(scene, world);
+    system.vehicles.push(vehicle);
+    system.addSupplyStation(new THREE.Vector3(0, 0, 0), 10, TeamId.ALLIES);
+
+    vehicle.health = 100;
+    vehicle.ammo = 5;
+    vehicle.currentSpeed = 0;
+
+    system.update(2, 0);
+    expect(vehicle.health).toBeGreaterThan(100);
+    expect(vehicle.ammo).toBeGreaterThan(5);
+    expect(system.isVehicleInSupplyZone(vehicle)).toBe(true);
+  });
+
+  it('补给站：异阵营载具不享受维修', () => {
+    const { scene, world, vehicle } = createVehicle(VehicleType.TANK);
+    vehicle.team = TeamId.AXIS;
+    const system = new VehicleSystem(scene, world);
+    system.vehicles.push(vehicle);
+    system.addSupplyStation(new THREE.Vector3(0, 0, 0), 10, TeamId.ALLIES);
+
+    vehicle.health = 100;
+    system.update(2, 0);
+    expect(vehicle.health).toBe(100);
+    expect(system.isVehicleInSupplyZone(vehicle)).toBe(false);
+  });
+
+  it('补给站：超出半径不生效', () => {
+    const { scene, world, vehicle } = createVehicle(VehicleType.TANK);
+    vehicle.team = TeamId.ALLIES;
+    const system = new VehicleSystem(scene, world);
+    system.vehicles.push(vehicle);
+    system.addSupplyStation(new THREE.Vector3(100, 0, 100), 10, TeamId.ALLIES);
+
+    vehicle.health = 100;
+    system.update(2, 0);
+    expect(vehicle.health).toBe(100);
   });
 });

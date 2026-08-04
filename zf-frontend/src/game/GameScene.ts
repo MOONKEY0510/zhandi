@@ -27,6 +27,7 @@ import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
+import { MineSystem } from '../equipment/MineSystem';
 import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
 import { VISUAL_PROFILES, resolveVisualProfileId, colorTemperatureToRGB } from '../environment/VisualProfile';
@@ -54,6 +55,7 @@ const EQUIPMENT_ORDER: EquipmentType[] = [
   EquipmentType.SMOKE_GRENADE,
   EquipmentType.FLASHBANG,
   EquipmentType.PANZERFAUST,
+  EquipmentType.MINE,
 ];
 
 /** 反坦克火箭参数（阶段 7 反载具链） */
@@ -75,6 +77,10 @@ interface VehicleProjectile {
   kind: 'machinegun' | 'cannon' | 'rocket';
   owner: Vehicle | null;
   hit: boolean;
+  /** 爆炸基准伤害（阶段 7：主炮/火箭各自携带，不再依赖全局常量） */
+  damage: number;
+  /** 对载具伤害倍率（反坦克火箭 > 1） */
+  vehicleMultiplier: number;
 }
 
 export class GameScene {
@@ -125,6 +131,8 @@ export class GameScene {
 
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
+  /** 反坦克地雷（阶段 7 P1） */
+  private mineSystem!: MineSystem;
   private currentEquipmentIndex = 0;
 
   // 载具
@@ -135,6 +143,8 @@ export class GameScene {
   // 载具炮弹实体（阶段 6/7：弹道 + 爆炸闭环）
   private vehicleProjectiles: VehicleProjectile[] = [];
   private projectileRaycaster = new THREE.Raycaster();
+  /** 补给站提示去重（阶段 7 P1） */
+  private lastSupplyZoneMessage = false;
 
   // 天气
   private weatherSystem!: WeatherSystem;
@@ -172,6 +182,8 @@ export class GameScene {
 
   // 特效池
   private tracers: Tracer[] = [];
+  /** 场景静态/半静态视觉对象（补给站标记等），dispose 时统一清理 */
+  private visualObjects: THREE.Object3D[] = [];
   private tracerMaterial = new THREE.LineBasicMaterial({
     color: 0xffdd44, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
   });
@@ -447,9 +459,21 @@ export class GameScene {
       (currentTime) => this.equipmentSystem.getActiveSmokeVolumes(currentTime),
     );
 
+    // 反坦克地雷：触发时复用爆炸管线（AoE + 四通道冲击 + 特效 + 破坏物联动）
+    this.mineSystem = new MineSystem(this.scene);
+    this.mineSystem.onTrigger = (mine, _target) => {
+      this.applyExplosion(mine.position, mine.explosionRadius, mine.damage, mine.vehicleMultiplier, null);
+      this.audioSystem.play(SoundType.EXPLOSION, mine.position);
+      this.hud.addKillMessage('地雷爆炸', this.simulationTimeMs);
+      this.mineSystem.remove(mine);
+    };
+
     // 载具
     this.vehicleSystem = new VehicleSystem(this.scene, this.physicsWorld.world);
     this.spawnVehicles();
+    // AI 反载具：登记载具引用（阶段 7 P1）
+    this.aiSystem.configureVehicles(this.vehicleSystem.vehicles);
+    this.spawnSupplyStations();
 
     // 天气
     this.weatherSystem = new WeatherSystem(this.scene, this.ambientLight, this.dirLight);
@@ -518,7 +542,40 @@ export class GameScene {
     const vehicleTypes = [VehicleType.JEEP, VehicleType.TANK];
 
     for (let index = 0; index < vehicleCount; index++) {
-      this.vehicleSystem.spawnVehicle(vehicleTypes[index % vehicleTypes.length], spawnPositions[index]);
+      // 阵营分配：偶数索引 → 玩家方（苏军），奇数索引 → 德军（AI 反载具闭环需要分阵营）
+      const team = index % 2 === 0
+        ? this.conquestMode.playerTeam
+        : (this.conquestMode.playerTeam === TeamId.AXIS ? TeamId.ALLIES : TeamId.AXIS);
+      this.vehicleSystem.spawnVehicle(vehicleTypes[index % vehicleTypes.length], spawnPositions[index], team);
+    }
+  }
+
+  /** 在双方营地部署载具补给站（阶段 7 P1）：同阵营载具进入半径快速维修 + 补弹 */
+  private spawnSupplyStations(): void {
+    const axisSpawn = this.conquestMode.teams.get(TeamId.AXIS)?.spawnPoint;
+    const alliesSpawn = this.conquestMode.teams.get(TeamId.ALLIES)?.spawnPoint;
+    if (axisSpawn) this.vehicleSystem.addSupplyStation(axisSpawn.clone().add(new THREE.Vector3(4, 0, 4)), 12, TeamId.AXIS);
+    if (alliesSpawn) this.vehicleSystem.addSupplyStation(alliesSpawn.clone().add(new THREE.Vector3(-4, 0, -4)), 12, TeamId.ALLIES);
+
+    // 视觉标记：半透明圆柱平台 + 阵营色立柱
+    for (const station of this.vehicleSystem.getSupplyStations()) {
+      const pad = new THREE.Mesh(
+        new THREE.CylinderGeometry(6, 6, 0.15, 24),
+        new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: 0.45, roughness: 0.9 }),
+      );
+      pad.position.set(station.position.x, 0.1, station.position.z);
+      pad.receiveShadow = true;
+      this.scene.add(pad);
+
+      const poleColor = station.team === TeamId.AXIS ? 0x8a2a2a : 0x2a4a8a;
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, 4, 8),
+        new THREE.MeshStandardMaterial({ color: poleColor, emissive: poleColor, emissiveIntensity: 0.5 }),
+      );
+      pole.position.set(station.position.x, 2, station.position.z);
+      this.scene.add(pole);
+
+      this.visualObjects.push(pad, pole);
     }
   }
 
@@ -1072,6 +1129,12 @@ export class GameScene {
       return;
     }
 
+    // 反坦克地雷：原地放置，敌方载具接近即爆（阶段 7 P1）
+    if (type === EquipmentType.MINE) {
+      this.placeMine();
+      return;
+    }
+
     const pos = this.camera.getWorldPosition(this.tmpVec1).clone();
     const dir = this.tmpVec2;
     this.camera.getWorldDirection(dir);
@@ -1080,6 +1143,24 @@ export class GameScene {
     if (equipment) {
       this.audioSystem.play(SoundType.UI_CLICK);
       this.hud.addKillMessage(`投掷 ${equipment.config.name}`, this.simulationTimeMs);
+    }
+  }
+
+  /** 放置反坦克地雷：上限由 MineSystem 按队伍控制 */
+  private placeMine(): void {
+    if (this.healthSystem.isDead) return;
+    const pos = this.player?.getPosition();
+    if (!pos) return;
+    const mine = this.mineSystem.place(
+      this.tmpVec1.set(pos.x, 0, pos.z).clone(),
+      this.conquestMode.playerTeam,
+    );
+    if (mine) {
+      this.audioSystem.play(SoundType.UI_CLICK);
+      this.hud.addKillMessage('已放置反坦克地雷', this.simulationTimeMs);
+    } else {
+      this.audioSystem.play(SoundType.UI_CLICK);
+      this.hud.addKillMessage('地雷已达上限', this.simulationTimeMs);
     }
   }
 
@@ -1098,6 +1179,8 @@ export class GameScene {
       kind: 'rocket',
       owner: null,
       hit: false,
+      damage: PANZERFAUST_DAMAGE,
+      vehicleMultiplier: PANZERFAUST_VEHICLE_MULT,
     });
     this.audioSystem.play(SoundType.GUNSHOT, pos);
     this.player?.addShake(0.1, 5);
@@ -1176,6 +1259,13 @@ export class GameScene {
     const vpos = vehicle.mesh.position;
     this.camera.position.set(vpos.x, vpos.y + 3, vpos.z + 6);
     this.camera.lookAt(vpos.x, vpos.y, vpos.z);
+
+    // 补给站提示（阶段 7 P1）：进入/离开同阵营补给区
+    const inSupply = this.vehicleSystem.isVehicleInSupplyZone(vehicle);
+    if (inSupply && !this.lastSupplyZoneMessage) {
+      this.hud.addKillMessage('进入补给站：维修 + 弹药补充中', this.simulationTimeMs);
+    }
+    this.lastSupplyZoneMessage = inSupply;
   }
 
   // ====== 载具武器弹道（阶段 6/7） ======
@@ -1190,6 +1280,8 @@ export class GameScene {
       kind: shot.kind,
       owner: shot.owner,
       hit: false,
+      damage: shot.kind === 'machinegun' ? 0 : shot.damage,
+      vehicleMultiplier: shot.kind === 'cannon' ? 1 : 1,
     });
     this.audioSystem.play(SoundType.GUNSHOT, shot.origin);
   }
@@ -1214,9 +1306,9 @@ export class GameScene {
       if (envHits.length > 0) {
         const hitPoint = envHits[0].point;
         if (p.kind === 'cannon') {
-          this.applyExplosion(hitPoint, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+          this.applyExplosion(hitPoint, p.owner!.config.explosionRadius, p.damage, p.vehicleMultiplier, p.owner);
         } else if (p.kind === 'rocket') {
-          this.applyExplosion(hitPoint, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
+          this.applyExplosion(hitPoint, PANZERFAUST_RADIUS, p.damage, p.vehicleMultiplier);
         } else {
           this.spawnImpact(hitPoint, envHits[0].face?.normal || dir);
           this.hitTargetWithProjectile(p, hitPoint);
@@ -1229,9 +1321,9 @@ export class GameScene {
       const entityHit = this.findProjectileEntityHit(p, prev, dir, travelled);
       if (entityHit) {
         if (p.kind === 'cannon') {
-          this.applyExplosion(entityHit, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+          this.applyExplosion(entityHit, p.owner!.config.explosionRadius, p.damage, p.vehicleMultiplier, p.owner);
         } else if (p.kind === 'rocket') {
-          this.applyExplosion(entityHit, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
+          this.applyExplosion(entityHit, PANZERFAUST_RADIUS, p.damage, p.vehicleMultiplier);
         } else {
           this.spawnImpact(entityHit, dir);
           this.hitTargetWithProjectile(p, entityHit);
@@ -1243,9 +1335,9 @@ export class GameScene {
       // 寿命耗尽：主炮未命中则在当前位置爆炸（触地）
       if (p.life >= p.maxLife) {
         if (p.kind === 'cannon') {
-          this.applyExplosion(p.position, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+          this.applyExplosion(p.position, p.owner!.config.explosionRadius, p.damage, p.vehicleMultiplier, p.owner);
         } else if (p.kind === 'rocket') {
-          this.applyExplosion(p.position, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
+          this.applyExplosion(p.position, PANZERFAUST_RADIUS, p.damage, p.vehicleMultiplier);
         }
         this.vehicleProjectiles.splice(i, 1);
       }
@@ -1860,12 +1952,26 @@ export class GameScene {
 
   // ====== AI 射击回调 ======
   private setupAIFireCallback(): void {
-    AIBot.onFire((origin, direction, damage, bot) => {
+    AIBot.onFire((origin, direction, damage, bot, kind) => {
       const currentTime = this.simulationTimeMs;
+      const isHostileToPlayer = bot.team !== this.conquestMode.playerTeam;
 
-      // 阵营检查：只有敌方 AI 才能攻击玩家
-      if (bot.team === this.conquestMode.playerTeam) {
-        return; // 友军 AI，不攻击玩家
+      // 反坦克火箭（阶段 7 AI 反载具）：直射弹道实体，命中即爆（对载具高倍率）
+      if (kind === 'rocket') {
+        this.spawnAIFireTracer(origin, direction, bot);
+        this.playGunshot(origin);
+        this.vehicleProjectiles.push({
+          position: origin.clone(),
+          velocity: direction.clone().multiplyScalar(PANZERFAUST_SPEED),
+          life: 0,
+          maxLife: 2.5,
+          kind: 'rocket',
+          owner: null,
+          hit: false,
+          damage,
+          vehicleMultiplier: PANZERFAUST_VEHICLE_MULT,
+        });
+        return;
       }
 
       // AI 射击弹道轨迹（红色）
@@ -1873,6 +1979,39 @@ export class GameScene {
 
       // AI 枪声（分层 + voice 预算）
       this.playGunshot(origin);
+
+      // 1) 载具命中（任意 AI 均可反制敌方载具；友军 AI 不打玩家但打敌方载具）
+      for (const vehicle of this.vehicleSystem.vehicles) {
+        if (vehicle.destroyed) continue;
+        if (vehicle.team === TeamId.NEUTRAL || vehicle.team === bot.team) continue;
+        const vPos = vehicle.mesh.position;
+        const toV = new THREE.Vector3().subVectors(vPos, origin);
+        const projection = toV.dot(direction);
+        if (projection < 0 || projection > bot.attackRange) continue;
+        const closest = new THREE.Vector3().copy(origin).addScaledVector(direction, projection);
+        const half = Math.max(vehicle.config.dimensions.width, vehicle.config.dimensions.length) / 2 + 0.3;
+        if (closest.distanceTo(vPos) < half) {
+          // 命中概率受精度影响
+          if (gameplayRandom() > bot.accuracy) return;
+          const result = vehicle.takeDamage(damage, closest, currentTime);
+          this.audioSystem.play(SoundType.HIT, closest);
+          this.spawnImpact(closest, direction);
+          if (result.killed) {
+            this.vehicleSystem.scheduleRespawn(vehicle);
+            this.hud.addKillMessage(`敌方 ${vehicle.config.name} 被摧毁`, currentTime);
+            this.spawnExplosionEffect(vehicle.mesh.position.clone());
+            this.spawnSmokeEffect(vehicle.mesh.position.clone(), 6);
+            if (this.currentVehicle?.vehicle === vehicle) {
+              this.currentVehicle = null;
+              this.inVehicle = false;
+            }
+          }
+          return;
+        }
+      }
+
+      // 2) 玩家命中（只有敌方 AI）
+      if (!isHostileToPlayer) return;
 
       // 射线检测：是否命中玩家
       const playerPos = this.player?.getPosition();
@@ -2192,6 +2331,18 @@ export class GameScene {
 
     // 战术装备
     this.equipmentSystem.update(dt, time);
+    // 地雷触发检测：以敌方载具为目标
+    this.mineSystem.update(
+      dt,
+      this.vehicleSystem.vehicles
+        .filter((v) => !v.destroyed)
+        .map((v) => ({
+          position: v.mesh.position,
+          alive: !v.destroyed,
+          team: v.team,
+          vehicle: v,
+        })),
+    );
     this.handleEquipmentDamage(time);
 
     // AI
@@ -2252,8 +2403,16 @@ export class GameScene {
 
     // HUD
     const currentEquip = EQUIPMENT_ORDER[this.currentEquipmentIndex];
-    const equipConfig = this.equipmentSystem.getActiveEquipment().find(e => e.config.type === currentEquip);
-    const equipCount = equipConfig ? equipConfig.count : 1;
+    let equipCount = 1;
+    let equipName = '手雷';
+    if (currentEquip === EquipmentType.MINE) {
+      equipCount = Math.max(0, 3 - this.mineSystem.getActiveCount(this.conquestMode.playerTeam));
+      equipName = '反坦克地雷';
+    } else {
+      const equipConfig = this.equipmentSystem.getActiveEquipment().find(e => e.config.type === currentEquip);
+      equipCount = equipConfig ? equipConfig.count : 1;
+      equipName = equipConfig?.config.name || '手雷';
+    }
 
     // 交互提示
     let interactionPrompt: string | null = null;
@@ -2297,7 +2456,7 @@ export class GameScene {
         position: this.player?.getPosition() || { x: 0, y: 0, z: 0 },
         stamina: this.player?.getStaminaPercentage(),
         equipmentCount: equipCount,
-        equipmentName: equipConfig?.config.name || '手雷',
+        equipmentName: equipName,
         interactionPrompt,
         damageDirection: showDamageDir,
         spawnProtection: this.healthSystem.getSpawnProtectionRemaining(time),
@@ -2388,6 +2547,18 @@ export class GameScene {
     this.weatherMaterialLink.clear();
     this.vehicleProjectiles = [];
     this.vehicleSystem?.dispose();
+    this.mineSystem?.dispose();
+    for (const obj of this.visualObjects) {
+      this.scene.remove(obj);
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          for (const m of mats) m.dispose();
+        }
+      });
+    }
+    this.visualObjects = [];
     this.destructibleSystem?.dispose();
     this.equipmentSystem?.dispose();
     this.mapManager?.dispose();

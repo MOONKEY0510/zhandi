@@ -7,6 +7,7 @@ export enum EquipmentType {
   MOLOTOV = 'molotov',
   DECOY = 'decoy',
   PANZERFAUST = 'panzerfaust',
+  MINE = 'mine',
 }
 
 export interface EquipmentConfig {
@@ -88,6 +89,17 @@ export const EQUIPMENT_CONFIGS: Record<EquipmentType, EquipmentConfig> = {
     throwSpeed: 55,
     throwArc: 0,
   },
+  [EquipmentType.MINE]: {
+    type: EquipmentType.MINE,
+    name: '反坦克地雷',
+    maxCount: 3,
+    fuseTime: 999,
+    effectDuration: 0,
+    radius: 4.5,
+    damage: 130,
+    throwSpeed: 0,
+    throwArc: 0,
+  },
 };
 
 export class Equipment {
@@ -145,6 +157,8 @@ export class Equipment {
         return 0x4444ff;
       case EquipmentType.PANZERFAUST:
         return 0x556633;
+      case EquipmentType.MINE:
+        return 0x443322;
       default:
         return 0x888888;
     }

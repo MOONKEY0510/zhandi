@@ -5,6 +5,13 @@ import { AIPerception } from './AIPerception';
 import { getAILodBudget } from './AILod';
 import { evaluateAIVisibility, type SmokeVolume } from './AIVisibility';
 import { decideTacticalAction, type AITacticalAction, type AITacticalDecision } from './SquadTactics';
+import {
+  VEHICLE_DETECTION_MULTIPLIER,
+  findNearestEnemyVehicle,
+  isVehicleTargetStale,
+  shouldEngageVehicle,
+  type VehicleTargetInfo,
+} from './AIVehicleTargeting';
 
 export enum AIState {
   PATROL = 'patrol',
@@ -67,12 +74,25 @@ const DIFFICULTY_CONFIGS: Record<AIDifficulty, DifficultyConfig> = {
 };
 
 // AI 射击事件回调
+// kind: 'bullet' 普通枪弹（对步兵/载具都有效）；'rocket' 反坦克火箭（对载具高伤）
 export type AIFireCallback = (
   origin: THREE.Vector3,
   direction: THREE.Vector3,
   damage: number,
-  bot: AIBot
+  bot: AIBot,
+  kind: 'bullet' | 'rocket'
 ) => void;
+
+/**
+ * AI 反载具目标（阶段 7 P1）。
+ * 结构兼容 Vehicle（mesh/team/destroyed/takeDamage），避免 AI 模块依赖 Rapier。
+ */
+export interface VehicleTarget {
+  mesh: THREE.Object3D;
+  team: TeamId;
+  destroyed: boolean;
+  takeDamage(amount: number, hitPointWorld?: THREE.Vector3, nowMs?: number): { killed: boolean };
+}
 
 export class AIBot {
   // 玩家阵营（静态字段，所有 AI 共享）
@@ -103,6 +123,16 @@ export class AIBot {
   patrolPath: PatrolPoint[] = [];
   currentPatrolIndex: number = 0;
   target: THREE.Object3D | null = null;
+  /** 反载具目标（阶段 7 P1）：target 指向其 mesh 时生效 */
+  targetVehicle: VehicleTarget | null = null;
+  private targetIsVehicle = false;
+  /** 是否配备反坦克火箭（步兵反载具链：assault 兵种默认携带） */
+  hasRocketLauncher = false;
+  /** 火箭发射冷却 ms */
+  rocketCooldownMs = 10_000;
+  /** 火箭对载具的 AoE 基准伤害（进入 applyExplosion 后还会乘载具倍率与装甲修正） */
+  rocketDamage = 120;
+  private lastRocketTime = Number.NEGATIVE_INFINITY;
   lastDamageTime: number = 0;
   deathTime: number = 0;
   respawnTime: number = 10000;
@@ -184,6 +214,60 @@ export class AIBot {
     evaluator: (observer: THREE.Vector3, target: THREE.Vector3, maxDistance: number) => boolean,
   ): void {
     this.visibilityEvaluator = evaluator;
+  }
+
+  /** 设定反载具目标：target 指向载具 mesh，后续射击/追击均以载具为基准 */
+  setVehicleTarget(vehicle: VehicleTarget | null): void {
+    if (vehicle === null || vehicle.destroyed) {
+      if (this.targetIsVehicle) {
+        this.target = null;
+        this.targetVehicle = null;
+        this.targetIsVehicle = false;
+        this.hasAcquiredTarget = false;
+      }
+      return;
+    }
+    if (this.targetVehicle === vehicle) {
+      if (!this.hasAcquiredTarget) {
+        this.targetAcquiredTime = performance.now();
+      }
+      return;
+    }
+    this.targetVehicle = vehicle;
+    this.target = vehicle.mesh;
+    this.targetIsVehicle = true;
+    this.hasAcquiredTarget = false;
+    this.targetAcquiredTime = performance.now();
+    if (this.state === AIState.PATROL) {
+      this.state = AIState.CHASE;
+    }
+  }
+
+  /** 反载具感知信息（供 AISystem 扫描用） */
+  getVehicleTargetInfo(): VehicleTargetInfo {
+    return {
+      id: this.targetVehicle ? this.targetVehicle.mesh.uuid : -1,
+      team: this.targetVehicle?.team ?? TeamId.NEUTRAL,
+      destroyed: this.targetVehicle?.destroyed ?? false,
+      position: {
+        x: this.targetVehicle?.mesh.position.x ?? this.mesh.position.x,
+        z: this.targetVehicle?.mesh.position.z ?? this.mesh.position.z,
+      },
+    };
+  }
+
+  /** 有效目标位置：打载具时以载具为基准，否则以玩家为基准 */
+  private getTargetPosition(playerPosition: THREE.Vector3): THREE.Vector3 {
+    if (this.targetIsVehicle && this.targetVehicle) {
+      return this.targetVehicle.mesh.position;
+    }
+    return playerPosition;
+  }
+
+  /** 当前目标距离（无目标返回 null），供载具威胁判定 */
+  getCurrentTargetDistance(playerPosition: THREE.Vector3): number | null {
+    if (!this.target || this.state === AIState.DEAD) return null;
+    return this.mesh.position.distanceTo(this.getTargetPosition(playerPosition));
   }
 
   applyTacticalDecision(decision: AITacticalDecision): void {
@@ -486,6 +570,11 @@ export class AIBot {
   }
 
   setTarget(target: THREE.Object3D | null): void {
+    // 切回普通目标时清除反载具状态
+    if (this.targetIsVehicle && (target === null || target !== this.targetVehicle?.mesh)) {
+      this.targetVehicle = null;
+      this.targetIsVehicle = false;
+    }
     if (this.target !== target) {
       this.hasAcquiredTarget = false;
       this.targetAcquiredTime = performance.now();
@@ -558,12 +647,14 @@ export class AIBot {
       this.isReloading = false;
     }
 
-    const distanceToPlayer = this.mesh.position.distanceTo(playerPosition);
+    // 有效目标位置：打载具时以载具为基准，否则以玩家为基准（阶段 7 AI 反载具）
+    const targetPosition = this.getTargetPosition(playerPosition);
+    const distanceToTarget = this.mesh.position.distanceTo(targetPosition);
     const visible = this.visibilityEvaluator
-      ? this.visibilityEvaluator(this.mesh.position, playerPosition, this.detectionRange)
-      : distanceToPlayer <= this.detectionRange;
+      ? this.visibilityEvaluator(this.mesh.position, targetPosition, this.detectionRange)
+      : distanceToTarget <= this.detectionRange;
     this.lastTargetVisible = visible;
-    const lod = getAILodBudget(distanceToPlayer, visible);
+    const lod = getAILodBudget(distanceToTarget, visible);
     this.mesh.visible = lod.animate || visible;
 
     if (currentTime >= this.nextPerceptionAt) {
@@ -588,17 +679,17 @@ export class AIBot {
       case AIState.PATROL:
         this.patrol(deltaTime);
         // 只有敌方 AI 才检测玩家
-        if (this.team !== AIBot.playerTeam && visible) {
+        if (this.team !== AIBot.playerTeam && visible && !this.targetIsVehicle) {
           this.setTarget(this.scene.getObjectByName('player') ?? null);
         }
         break;
 
       case AIState.CHASE:
-        this.chase(deltaTime, currentTime, playerPosition, distanceToPlayer, visible);
+        this.chase(deltaTime, currentTime, targetPosition, distanceToTarget, visible);
         break;
 
       case AIState.ATTACK:
-        this.attack(deltaTime, currentTime, playerPosition, distanceToPlayer, visible);
+        this.attack(deltaTime, currentTime, targetPosition, distanceToTarget, visible);
         break;
 
       case AIState.COVER:
@@ -770,7 +861,39 @@ export class AIBot {
     }
   }
 
-  private attemptFire(currentTime: number, playerPosition: THREE.Vector3): void {
+  private attemptFire(currentTime: number, targetPosition: THREE.Vector3): void {
+    // 反载具火箭：只对载具目标使用，独立冷却，命中即爆（阶段 7 AI 反载具）
+    if (this.targetIsVehicle && this.targetVehicle && this.hasRocketLauncher) {
+      const rocketReady = currentTime - this.lastRocketTime >= this.rocketCooldownMs;
+      if (!rocketReady) {
+        // 冷却中退化为普通枪弹骚扰
+        this.attemptBulletFire(currentTime, targetPosition);
+        return;
+      }
+      this.lastRocketTime = currentTime;
+
+      // 火箭筒枪口
+      const muzzlePos = new THREE.Vector3();
+      this.muzzleFlashMesh.getWorldPosition(muzzlePos);
+
+      // 瞄准载具中心，散布比枪弹小（火箭筒相对稳定）
+      const direction = targetPosition.clone().sub(muzzlePos).normalize();
+      const spread = 0.03;
+      direction.x += (gameplayRandom() - 0.5) * spread;
+      direction.y += (gameplayRandom() - 0.5) * spread;
+      direction.z += (gameplayRandom() - 0.5) * spread;
+      direction.normalize();
+
+      for (const cb of AIBot.fireCallbacks) {
+        cb(muzzlePos, direction, this.rocketDamage, this, 'rocket');
+      }
+      return;
+    }
+
+    this.attemptBulletFire(currentTime, targetPosition);
+  }
+
+  private attemptBulletFire(currentTime: number, targetPosition: THREE.Vector3): void {
     const timeSinceLastFire = (currentTime - this.lastFireTime) / 1000;
     const effectiveFireRate = this.isReloading ? 0 : this.fireRate;
 
@@ -793,11 +916,11 @@ export class AIBot {
     // 枪口火焰
     (this.muzzleFlashMesh.material as THREE.MeshBasicMaterial).opacity = 1;
 
-    // 计算射击方向（从枪口到玩家，带散布）
+    // 计算射击方向（从枪口到目标，带散布）
     const muzzlePos = new THREE.Vector3();
     this.muzzleFlashMesh.getWorldPosition(muzzlePos);
 
-    const direction = playerPosition.clone().sub(muzzlePos).normalize();
+    const direction = targetPosition.clone().sub(muzzlePos).normalize();
 
     // 散布：精度越低散布越大 + 受击精度惩罚
     const effectiveAccuracy = Math.max(0.2, this.accuracy - this.accuracyPenalty);
@@ -809,7 +932,7 @@ export class AIBot {
 
     // 触发射击回调（由 GameScene 处理弹道轨迹和伤害）
     for (const cb of AIBot.fireCallbacks) {
-      cb(muzzlePos, direction, this.damage, this);
+      cb(muzzlePos, direction, this.damage, this, 'bullet');
     }
   }
 
@@ -883,6 +1006,10 @@ export class AISystem {
   private currentTime = 0;
   private lastTacticalUpdate = 0;
   private readonly tacticalLog: { botIndex: number; action: AITacticalAction; reason: string; time: number }[] = [];
+  /** 反载具扫描（阶段 7 P1）：AISystem 持有载具引用，周期性给 Bot 指派载具目标 */
+  private vehicles: readonly VehicleTarget[] = [];
+  private lastVehicleScan = 0;
+  private vehicleScanIntervalMs = 400;
 
   constructor(scene: THREE.Scene, count: number = 5) {
     this.spawnBots(scene, count);
@@ -921,6 +1048,8 @@ export class AISystem {
     const roles: AIBot['squadRole'][] = ['leader', 'assault', 'support', 'medic'];
     this.bots.forEach((bot, index) => {
       bot.squadRole = roles[index % roles.length];
+      // 反坦克兵种：assault 携带火箭筒（步兵反载具链）
+      bot.hasRocketLauncher = bot.squadRole === 'assault';
     });
   }
 
@@ -1011,11 +1140,87 @@ export class AISystem {
     }
   }
 
+  /** 登记场景中的载具（GameScene 在创建载具后调用） */
+  configureVehicles(vehicles: readonly VehicleTarget[]): void {
+    this.vehicles = vehicles;
+  }
+
+  /** 当前感知到的敌方载具列表（调试/UI 用） */
+  getTargetedVehicles(): VehicleTarget[] {
+    const targeted: VehicleTarget[] = [];
+    for (const bot of this.bots) {
+      if (bot.targetVehicle && !targeted.includes(bot.targetVehicle)) {
+        targeted.push(bot.targetVehicle);
+      }
+    }
+    return targeted;
+  }
+
+  /** 周期性反载具扫描：为 Bot 指派/刷新载具目标 */
+  private scanVehiclesForBots(currentTime: number, playerPosition: THREE.Vector3): void {
+    if (this.vehicles.length === 0) return;
+    for (const bot of this.bots) {
+      if (bot.state === AIState.DEAD) continue;
+
+      const observer = { x: bot.mesh.position.x, z: bot.mesh.position.z };
+      const detectionRange = bot.detectionRange * VEHICLE_DETECTION_MULTIPLIER;
+
+      // 已有载具目标：失效（被摧毁/超距）则清除
+      if (bot.targetVehicle) {
+        const info: VehicleTargetInfo = {
+          id: bot.targetVehicle.mesh.uuid,
+          team: bot.targetVehicle.team,
+          destroyed: bot.targetVehicle.destroyed,
+          position: { x: bot.targetVehicle.mesh.position.x, z: bot.targetVehicle.mesh.position.z },
+        };
+        if (isVehicleTargetStale(info, observer, detectionRange)) {
+          bot.setVehicleTarget(null);
+          if (!bot.target) bot.state = AIState.PATROL;
+        }
+        continue;
+      }
+
+      const nearest = findNearestEnemyVehicle(
+        this.vehicles.map((v) => ({
+          id: v.mesh.uuid,
+          team: v.team,
+          destroyed: v.destroyed,
+          position: { x: v.mesh.position.x, z: v.mesh.position.z },
+        })),
+        observer,
+        bot.team,
+        detectionRange,
+      );
+      if (!nearest) continue;
+
+      const distance = Math.hypot(nearest.position.x - observer.x, nearest.position.z - observer.z);
+      const currentTargetDistance = bot.getCurrentTargetDistance(playerPosition);
+      const ctx = {
+        botTeam: bot.team,
+        hasRocketLauncher: bot.hasRocketLauncher,
+        hasTarget: bot.target !== null,
+        targetIsVehicle: false,
+        currentTargetDistance,
+        playerDistance: bot.mesh.position.distanceTo(playerPosition),
+      };
+      if (!shouldEngageVehicle(distance, ctx)) continue;
+
+      const vehicle = this.vehicles.find((v) => v.mesh.uuid === nearest.id);
+      if (vehicle) {
+        bot.setVehicleTarget(vehicle);
+      }
+    }
+  }
+
   update(deltaTime: number, currentTime: number, playerPosition: THREE.Vector3): void {
     this.currentTime = currentTime;
     if (currentTime - this.lastTacticalUpdate >= 1_000) {
       this.lastTacticalUpdate = currentTime;
       this.updateSquadTactics(currentTime, playerPosition);
+    }
+    if (currentTime - this.lastVehicleScan >= this.vehicleScanIntervalMs) {
+      this.lastVehicleScan = currentTime;
+      this.scanVehiclesForBots(currentTime, playerPosition);
     }
     for (const bot of this.bots) {
       bot.update(deltaTime, currentTime, playerPosition);

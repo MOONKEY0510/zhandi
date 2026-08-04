@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { TeamId } from '../game/ConquestMode';
 
 export enum VehicleType {
   JEEP = 'jeep',
@@ -154,6 +155,14 @@ export interface VehicleSeatInfo {
   occupant: string | null;
 }
 
+/** 载具补给站（阶段 7 P1）：进入半径内的同阵营载具快速维修 + 弹药补充 */
+export interface SupplyStation {
+  id: number;
+  position: THREE.Vector3;
+  radius: number;
+  team: TeamId;
+}
+
 interface GroundProbeResult {
   hit: boolean;
   groundY: number;
@@ -172,6 +181,8 @@ export class Vehicle {
   mesh: THREE.Group;
   body: RAPIER.RigidBody | null = null;
   collider: RAPIER.Collider | null = null;
+  /** 所属阵营（阶段 7 AI 反载具：友方载具不被打，敌方载具被 AI 集火） */
+  team: TeamId = TeamId.NEUTRAL;
   health: number;
   currentSpeed: number = 0;
   currentTurn: number = 0;
@@ -203,8 +214,9 @@ export class Vehicle {
   readonly spawnPosition: THREE.Vector3;
   private spawnRotationY = 0;
 
-  constructor(scene: THREE.Scene, type: VehicleType, position: THREE.Vector3) {
+  constructor(scene: THREE.Scene, type: VehicleType, position: THREE.Vector3, team: TeamId = TeamId.NEUTRAL) {
     this.config = VEHICLE_CONFIGS[type];
+    this.team = team;
     this.health = this.config.health;
     this.ammo = this.config.ammo;
     this.currentMaxSpeed = this.config.maxSpeed;
@@ -688,23 +700,68 @@ export class VehicleSystem {
   private respawnQueue: VehicleRespawnEntry[] = [];
   /** 重生延迟秒数 */
   respawnDelaySeconds = 15;
+  /** 载具补给站（阶段 7 P1） */
+  private supplyStations: SupplyStation[] = [];
+  private nextStationId = 1;
 
   constructor(scene: THREE.Scene, world: RAPIER.World) {
     this.scene = scene;
     this.world = world;
   }
 
-  spawnVehicle(type: VehicleType, position: THREE.Vector3): Vehicle {
-    const vehicle = new Vehicle(this.scene, type, position);
+  spawnVehicle(type: VehicleType, position: THREE.Vector3, team: TeamId = TeamId.NEUTRAL): Vehicle {
+    const vehicle = new Vehicle(this.scene, type, position, team);
     vehicle.createPhysicsBody(this.world);
     this.vehicles.push(vehicle);
     return vehicle;
+  }
+
+  /** 添加载具补给站：同阵营载具进入半径后快速维修 + 弹药补充 */
+  addSupplyStation(position: THREE.Vector3, radius: number, team: TeamId): SupplyStation {
+    const station: SupplyStation = { id: this.nextStationId++, position: position.clone(), radius, team };
+    this.supplyStations.push(station);
+    return station;
+  }
+
+  getSupplyStations(): readonly SupplyStation[] {
+    return this.supplyStations;
+  }
+
+  /** 载具是否处于补给站生效范围（同阵营 + 半径内） */
+  isVehicleInSupplyZone(vehicle: Vehicle): boolean {
+    if (vehicle.destroyed) return false;
+    for (const station of this.supplyStations) {
+      if (station.team !== TeamId.NEUTRAL && station.team !== vehicle.team) continue;
+      if (vehicle.mesh.position.distanceTo(station.position) <= station.radius) return true;
+    }
+    return false;
+  }
+
+  private updateSupplyStations(deltaTime: number): void {
+    for (const vehicle of this.vehicles) {
+      if (vehicle.destroyed) continue;
+      for (const station of this.supplyStations) {
+        if (station.team !== TeamId.NEUTRAL && station.team !== vehicle.team) continue;
+        if (vehicle.mesh.position.distanceTo(station.position) > station.radius) continue;
+        // 快速维修：80 HP/s（远高于 5 秒未受击的 1.5 HP/s 自动维修）
+        if (vehicle.health < vehicle.config.health) {
+          vehicle.health = Math.min(vehicle.config.health, vehicle.health + 80 * deltaTime);
+        }
+        // 弹药补充：停车时 30 发/s，移动中 5 发/s
+        const ammoRate = vehicle.currentSpeed < 1 ? 30 : 5;
+        if (vehicle.ammo < vehicle.config.ammo) {
+          vehicle.ammo = Math.min(vehicle.config.ammo, vehicle.ammo + ammoRate * deltaTime);
+        }
+        break;
+      }
+    }
   }
 
   update(deltaTime: number, nowMs: number): void {
     for (const vehicle of this.vehicles) {
       vehicle.update(deltaTime, nowMs);
     }
+    this.updateSupplyStations(deltaTime);
     this.updateRespawns(deltaTime);
   }
 
