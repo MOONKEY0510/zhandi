@@ -16,6 +16,7 @@ import {
   type Snapshot,
 } from '../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../shared/codec.ts';
+import { computeVisiblePlayers } from '../shared/interest.ts';
 import { SimClock } from './SimClock.ts';
 import { RoomManager } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
@@ -276,28 +277,41 @@ export class ServerApp {
 
   private broadcastSnapshots(tick: number): void {
     for (const room of this.roomManager.listRooms()) {
-      const players = room.players;
-      if (players.length === 0) continue;
-      const snapshot: Snapshot = {
-        kind: 'snapshot',
-        tick,
-        serverTime: this.clock.nowMs(),
-        players: [],
-      };
-      for (const roomPlayer of players) {
+      const roomPlayers = room.players;
+      if (roomPlayers.length === 0) continue;
+
+      // 先汇总全房间玩家权威状态，再按观察者裁剪（Interest Management）
+      const all: Snapshot['players'] = [];
+      for (const roomPlayer of roomPlayers) {
         const conn = this.findConnection(roomPlayer.id);
         if (conn?.sim) {
-          snapshot.players.push(conn.sim.toSnapshot());
+          all.push(conn.sim.toSnapshot());
         } else {
-          snapshot.players.push({
-            id: roomPlayer.id,
-            x: 0, y: 0, z: 0, yaw: 0, pitch: 0,
-            health: 0,
-            alive: false,
-          });
+          all.push({ id: roomPlayer.id, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, health: 0, alive: false });
         }
       }
-      this.broadcastToRoom(room.id, snapshot);
+
+      for (const roomPlayer of roomPlayers) {
+        const conn = this.findConnection(roomPlayer.id);
+        if (!conn?.sim || conn.ws.readyState !== conn.ws.OPEN) continue;
+        const observer = conn.sim.state;
+        const visible = computeVisiblePlayers({
+          observerId: conn.playerId!,
+          observerX: observer.x,
+          observerZ: observer.z,
+          players: all,
+        });
+        // 观察者本人附加 ackSeq（服务端已确认的最高输入 seq，客户端预测校正基准）
+        const snapshot: Snapshot = {
+          kind: 'snapshot',
+          tick,
+          serverTime: this.clock.nowMs(),
+          players: visible.map((p) =>
+            p.id === conn.playerId && conn.lastSeq >= 0 ? { ...p, ackSeq: conn.lastSeq } : p,
+          ),
+        };
+        this.send(conn.ws, snapshot);
+      }
     }
   }
 

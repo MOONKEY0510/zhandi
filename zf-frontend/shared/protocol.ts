@@ -23,6 +23,8 @@ export const PLAYER_MAX_HEALTH = 100 as const;
 export const INPUT_RATE_LIMIT_PER_SECOND = 40 as const;
 /** 射击冷却（ms），服务端裁决的射速上限 */
 export const SERVER_FIRE_COOLDOWN_MS = 120 as const;
+/** 俯仰角钳制（弧度），客户端预测与服务端裁决共用 */
+export const PLAYER_PITCH_CLAMP = Math.PI / 2 - 0.01;
 /** 地图边界（米），超界位置钳制 */
 export const MAP_BOUND = 160 as const;
 
@@ -113,6 +115,11 @@ export interface SnapshotPlayer {
   pitch: number;
   health: number;
   alive: boolean;
+  /**
+   * 服务端已确认的最高输入 seq（仅观察者本人有值）。
+   * 客户端预测校正基准：回滚到该状态并重放 seq > ackSeq 的未确认输入。
+   */
+  ackSeq?: number;
 }
 
 export interface Snapshot {

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { NetClient, type RawTransport } from './NetClient.ts';
+import { ClientPrediction } from './ClientPrediction.ts';
 import { encodeMessage, decodeMessage } from '../../shared/codec.ts';
-import { PROTOCOL_VERSION, type Snapshot } from '../../shared/protocol.ts';
+import { PROTOCOL_VERSION, TICK_RATE_HZ, PLAYER_WALK_SPEED, type Snapshot } from '../../shared/protocol.ts';
 
 /** 内存假传输：记录发出的消息，允许测试注入服务端回复 */
 class FakeTransport implements RawTransport {
@@ -123,6 +124,29 @@ describe('NetClient（阶段 8 协议客户端）', () => {
     client.onError = (code, _message) => { captured.code = code; };
     transport.inject({ kind: 'error', code: 'room_full', message: '房间已满' });
     expect(captured.code).toBe('room_full');
+  });
+
+  it('挂载预测：sendInput 推进本地预测，快照按 ackSeq 校正本人', async () => {
+    const transport = new FakeTransport();
+    const prediction = new ClientPrediction({ x: 0, y: 0, z: 0, yaw: 0, pitch: 0, health: 100, alive: true });
+    const client = NetClient.withTransport(transport, 'p1', '玩家一', { pingIntervalMs: 0, prediction });
+    await client.connect();
+    transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+    const input = { moveForward: true, moveBackward: false, moveLeft: false, moveRight: false, sprint: false, fire: false, aimYaw: 0, aimPitch: 0 };
+    // 连续 10 tick 输入 → 本地预测推进 10 帧（误差 10×5.2/30 ≈ 1.73m > 0.5m 阈值）
+    for (let i = 0; i < 10; i++) client.sendInput(input);
+    expect(prediction.state.z).toBeCloseTo(-10 * PLAYER_WALK_SPEED / TICK_RATE_HZ, 10);
+    // 快照校正：服务端确认 seq 10，位置在原点 → 硬校正回滚
+    let reconcile: ReturnType<ClientPrediction['reconcile']> | null = null;
+    client.onPredictionReconcile = (r) => { reconcile = r; };
+    transport.inject({
+      kind: 'snapshot', tick: 10, serverTime: 1000,
+      players: [{ id: 'p1', x: 0, y: 0, z: 0, yaw: 0, pitch: 0, health: 100, alive: true, ackSeq: 10 }],
+    });
+    expect(reconcile).not.toBeNull();
+    expect(reconcile!.snapped).toBe(true);
+    expect(prediction.state.z).toBeCloseTo(0, 10);
+    expect(prediction.pendingInputs.length).toBe(0);
   });
 
   it('disconnect 关闭传输', async () => {

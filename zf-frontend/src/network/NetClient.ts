@@ -12,8 +12,10 @@ import {
   type JoinAck,
 } from '../../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../../shared/codec.ts';
+import { TICK_RATE_HZ } from '../../shared/protocol.ts';
 import { SnapshotBuffer, type SnapshotData, type InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { NetSimulator } from './NetSimulator.ts';
+import { ClientPrediction, type ReconcileResult } from './ClientPrediction.ts';
 
 /** 原始传输抽象：发送字节 + 消息回调（NetSimulator 与 WebSocket 都满足） */
 export interface RawTransport {
@@ -67,6 +69,11 @@ export interface NetClientOptions {
   simulator?: NetSimulator;
   /** ping 周期 ms */
   pingIntervalMs?: number;
+  /**
+   * 客户端预测实例（可选）：sendInput 时推进预测（每输入一服务端 tick），
+   * 快照到达时以 ackSeq 校正本人状态。调用方应按服务端 tick 节奏发送输入。
+   */
+  prediction?: ClientPrediction;
 }
 
 export interface NetClientStats {
@@ -86,6 +93,7 @@ export class NetClient {
   private readonly displayName: string;
   private readonly options: Required<Pick<NetClientOptions, 'maxReconnects' | 'pingIntervalMs'>>;
   private readonly simulator: NetSimulator | null;
+  private readonly prediction: ClientPrediction | null;
 
   readonly snapshotBuffer = new SnapshotBuffer();
   private seq = 0;
@@ -104,6 +112,8 @@ export class NetClient {
   onJoinAck: ((ack: JoinAck) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
+  /** 每次快照校正本人预测后回调（统计/调试用） */
+  onPredictionReconcile: ((result: ReconcileResult) => void) | null = null;
 
   constructor(url: string, playerId: string, displayName: string, options: NetClientOptions = {}) {
     this.playerId = playerId;
@@ -113,6 +123,7 @@ export class NetClient {
       pingIntervalMs: options.pingIntervalMs ?? 1000,
     };
     this.simulator = options.simulator ?? null;
+    this.prediction = options.prediction ?? null;
 
     const raw = new WebSocketTransport(url);
     if (this.simulator) {
@@ -151,11 +162,14 @@ export class NetClient {
     this.send({ kind: 'join', roomId });
   }
 
-  /** 发送移动/开火输入（自动附加 seq 与本地 tick） */
+  /** 发送移动/开火输入（自动附加 seq 与本地 tick；挂载预测时同步推进本地预测） */
   sendInput(input: Omit<PlayerInput, 'kind' | 'seq' | 'clientTick'>): void {
     if (!this.connected) return;
     this.seq += 1;
     this.inputsSent += 1;
+    if (this.prediction) {
+      this.prediction.pushInput({ ...input, seq: this.seq }, 1 / TICK_RATE_HZ);
+    }
     this.send({
       kind: 'input',
       seq: this.seq,
@@ -215,14 +229,22 @@ export class NetClient {
         this.phase = msg.phase;
         this.onRoomState?.(msg);
         break;
-      case 'snapshot':
+      case 'snapshot': {
         this.snapshotsReceived += 1;
         this.snapshotBuffer.push({ tick: msg.tick, serverTime: msg.serverTime, players: msg.players });
+        if (this.prediction) {
+          const own = msg.players.find((p) => p.id === this.playerId);
+          if (own) {
+            const result = this.prediction.reconcile(own);
+            this.onPredictionReconcile?.(result);
+          }
+        }
         if (this.onSnapshot) {
           const interpolated = this.snapshotBuffer.interpolate();
           if (interpolated) this.onSnapshot(interpolated, this.snapshotBuffer.getLatest()!);
         }
         break;
+      }
       case 'pong': {
         const now = this.now();
         const rtt = now - msg.clientTime;

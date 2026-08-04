@@ -67,6 +67,19 @@ describe('codec（阶段 8 二进制协议）', () => {
     }
   });
 
+  it('snapshot 玩家 ackSeq 可选字段往返（本人有值，他人缺省）', () => {
+    const msg: Snapshot = {
+      kind: 'snapshot', tick: 5, serverTime: 100,
+      players: [
+        { id: 'me', x: 1, y: 0, z: 1, yaw: 0, pitch: 0, health: 100, alive: true, ackSeq: 42 },
+        { id: 'other', x: 2, y: 0, z: 2, yaw: 0, pitch: 0, health: 100, alive: true },
+      ],
+    };
+    const decoded = roundTrip(msg);
+    expect(decoded.players[0].ackSeq).toBe(42);
+    expect(decoded.players[1].ackSeq).toBeUndefined();
+  });
+
   it('room_state 往返一致（含玩家列表）', () => {
     const msg: RoomState = {
       kind: 'room_state', roomId: 'room-1', phase: 'started', map: 'stalingrad',

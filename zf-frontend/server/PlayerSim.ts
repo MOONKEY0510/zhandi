@@ -7,6 +7,7 @@ import {
   PLAYER_WALK_SPEED,
   PLAYER_SPRINT_SPEED,
   PLAYER_MAX_HEALTH,
+  PLAYER_PITCH_CLAMP,
   MAP_BOUND,
   SERVER_FIRE_COOLDOWN_MS,
 } from '../shared/protocol.ts';
@@ -43,7 +44,7 @@ export interface StepResult {
   corrected: boolean;
 }
 
-const PITCH_CLAMP = Math.PI / 2 - 0.01;
+const PITCH_CLAMP = PLAYER_PITCH_CLAMP;
 
 export class PlayerSim {
   readonly state: PlayerSimState;

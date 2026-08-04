@@ -83,7 +83,7 @@ function sizeOf(msg: NetworkMessage): number {
     case 'snapshot': {
       let size = 1 + 4 + 4 + 1;
       for (const p of msg.players) {
-        size += 1 + utf8Len(p.id) + 4 + 4 + 4 + 4 + 4 + 2 + 1;
+        size += 1 + utf8Len(p.id) + 4 + 4 + 4 + 4 + 4 + 2 + 1 + 1 + (p.ackSeq !== undefined ? 4 : 0);
       }
       return size;
     }
@@ -156,6 +156,10 @@ function encodeBody(msg: NetworkMessage, view: DataView): void {
       view.setUint8(o, msg.players.length); o += 1;
       for (const p of msg.players) {
         o = writeString(view, o, p.id);
+        view.setUint8(o, p.ackSeq !== undefined ? 1 : 0); o += 1;
+        if (p.ackSeq !== undefined) {
+          view.setUint32(o, p.ackSeq, true); o += 4;
+        }
         view.setFloat32(o, p.x, true); o += 4;
         view.setFloat32(o, p.y, true); o += 4;
         view.setFloat32(o, p.z, true); o += 4;
@@ -350,6 +354,8 @@ export function decodeMessage(bytes: Uint8Array): NetworkMessage {
       const players: Snapshot['players'] = [];
       for (let i = 0; i < count; i++) {
         const id = r.string();
+        const hasAckSeq = r.u8() === 1;
+        const ackSeq = hasAckSeq ? r.u32() : undefined;
         const x = r.f32();
         const y = r.f32();
         const z = r.f32();
@@ -357,7 +363,7 @@ export function decodeMessage(bytes: Uint8Array): NetworkMessage {
         const pitch = r.f32();
         const health = r.u16() / 100;
         const alive = r.u8() === 1;
-        players.push({ id, x, y, z, yaw, pitch, health, alive });
+        players.push({ id, x, y, z, yaw, pitch, health, alive, ...(ackSeq !== undefined ? { ackSeq } : {}) });
       }
       return { kind, tick, serverTime, players };
     }
