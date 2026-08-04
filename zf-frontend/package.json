@@ -6,12 +6,14 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
+    "typecheck:server": "tsc --noEmit -p server/tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --write eslint.config.js vitest.config.ts src/config src/core src/input/InputManager.test.ts src/performance/PerformanceMonitor.ts src/performance/PerformanceMonitor.test.ts src/performance/PerformancePanel.ts src/physics/PhysicsWorld.test.ts",
     "format:check": "prettier --check eslint.config.js vitest.config.ts src/config src/core src/input/InputManager.test.ts src/performance/PerformanceMonitor.ts src/performance/PerformanceMonitor.test.ts src/performance/PerformancePanel.ts src/physics/PhysicsWorld.test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build:check",
+    "server": "vite-node server/index.ts",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:server && npm run test && npm run build:check",
     "build": "tsc --noEmit && vite build",
     "build:check": "tsc --noEmit && vite build --mode check",
     "preview": "vite preview"
