@@ -122,6 +122,14 @@ export class ConquestMode {
     this.playerTeam = team;
   }
 
+  reset(): void {
+    this.isGameOver = false;
+    this.winner = null;
+    this.gameTime = 0;
+    for (const team of this.teams.values()) team.tickets = team.maxTickets;
+    this.setupControlPoints();
+  }
+
   // 更新据点占领逻辑
   update(dt: number, entities: { position: THREE.Vector3; team: TeamId }[]): void {
     this.gameTime += dt;

@@ -16,8 +16,10 @@ import { HUD } from '../ui/HUD';
 import { MainMenu } from '../ui/MainMenu';
 import { SettingsMenu, type GameSettings } from '../ui/SettingsMenu';
 import { Scoreboard } from '../ui/Scoreboard';
+import { DeploymentMenu } from '../ui/DeploymentMenu';
 import { HealthSystem } from '../player/HealthSystem';
 import { RespawnSystem } from '../player/RespawnSystem';
+import type { SoldierClassDefinition } from '../player/SoldierClass';
 import { AISystem, AIBot } from '../ai/AIBot';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { MapManager } from '../maps/MapManager';
@@ -29,6 +31,7 @@ import { GameMode, GameModeType } from './GameMode';
 import { ConquestPresenter } from './ConquestPresenter';
 import { AchievementSystem, AchievementType } from './AchievementSystem';
 import { ConquestMode, TeamId } from './ConquestMode';
+import { RoundFlow, RoundPhase } from './RoundFlow';
 
 const WEAPON_ORDER: WeaponType[] = [
   WeaponType.ASSAULT_RIFLE,
@@ -75,6 +78,8 @@ export class GameScene {
   private mainMenu!: MainMenu;
   private settingsMenu!: SettingsMenu;
   private scoreboard!: Scoreboard;
+  private deploymentMenu!: DeploymentMenu;
+  private selectedClass: SoldierClassDefinition | null = null;
 
   // 生命与重生
   private healthSystem!: HealthSystem;
@@ -111,6 +116,7 @@ export class GameScene {
   // 征服模式
   private conquestMode!: ConquestMode;
   private conquestPresenter!: ConquestPresenter;
+  private roundFlow = new RoundFlow({ deploymentSeconds: 0, countdownSeconds: 5, resultsSeconds: 12 });
   private controlPointMeshes: THREE.Mesh[] = [];
 
   // 环境物体
@@ -199,6 +205,7 @@ export class GameScene {
     this.performancePanel = new PerformancePanel(this.performanceMonitor);
     this.performancePanel.setVisible(this.config.benchmark.enabled);
     this.setupGameEvents();
+    this.setupRoundFlow();
 
     this.scene.add(this.camera);
     this.inputManager = new InputManager();
@@ -208,6 +215,24 @@ export class GameScene {
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+  }
+
+  private setupRoundFlow(): void {
+    this.roundFlow.onPhaseChange = (phase) => {
+      const labels: Record<RoundPhase, string> = {
+        [RoundPhase.DEPLOYMENT]: '部署阶段',
+        [RoundPhase.COUNTDOWN]: '战斗即将开始',
+        [RoundPhase.COMBAT]: '战斗开始',
+        [RoundPhase.RESULTS]: '回合结算',
+      };
+      this.events.emit('ui:message', { text: labels[phase], time: this.simulationTimeMs });
+    };
+    this.roundFlow.onRestart = () => {
+      this.conquestMode?.reset();
+      this.selectedClass = null;
+      this.deploymentMenu?.show();
+      if (this.stateMachine.is(GameState.ROUND_END)) this.stateMachine.transition(GameState.PAUSED);
+    };
   }
 
   private setupGameEvents(): void {
@@ -228,6 +253,7 @@ export class GameScene {
     });
     this.events.on('round:end', ({ winnerName, time }) => {
       this.events.emit('ui:message', { text: `游戏结束！${winnerName} 获胜！`, time });
+      this.roundFlow.finishRound();
       if (this.stateMachine.is(GameState.PLAYING)) this.stateMachine.transition(GameState.ROUND_END);
     });
   }
@@ -237,6 +263,8 @@ export class GameScene {
     this.mainMenu = new MainMenu();
     this.settingsMenu = new SettingsMenu();
     this.scoreboard = new Scoreboard();
+    this.deploymentMenu = new DeploymentMenu();
+    this.deploymentMenu.onDeploy = (definition) => this.deployAs(definition);
 
     this.mainMenu.onPlay = () => {
       this.mainMenu.hide();
@@ -380,12 +408,12 @@ export class GameScene {
 
     // 输入
     this.inputManager.init();
-    this.inputManager.requestPointerLock();
     this.setupInputCallbacks();
 
     this.simulationTimeMs = performance.now();
     this.simulationClock.reset(this.simulationTimeMs);
-    this.stateMachine.transition(GameState.PLAYING);
+    this.stateMachine.transition(GameState.PAUSED);
+    this.deploymentMenu.show();
 
     // 尝试连接服务器
     try {
@@ -393,6 +421,22 @@ export class GameScene {
     } catch (error) {
       console.warn('Running in offline mode', error);
     }
+  }
+
+  private deployAs(definition: SoldierClassDefinition): void {
+    this.selectedClass = definition;
+    this.weaponSystem.switchWeapon(definition.primaryWeapon);
+    this.weaponView.equipWeapon(this.weaponSystem.getCurrentWeapon());
+    this.currentEquipmentIndex = 0;
+    this.deploymentMenu.hide();
+    if (this.stateMachine.is(GameState.PAUSED)) this.stateMachine.transition(GameState.PLAYING);
+    this.roundFlow.update(0);
+    this.simulationClock.reset(performance.now());
+    this.inputManager.requestPointerLock();
+    this.events.emit('ui:message', {
+      text: `已部署为${definition.name}：${definition.role}`,
+      time: this.simulationTimeMs,
+    });
   }
 
   private spawnVehicles(): void {
@@ -409,8 +453,9 @@ export class GameScene {
 
   private setupInputCallbacks(): void {
     this.inputManager.onWeaponSwitch((slot) => {
-      if (slot < WEAPON_ORDER.length) {
-        this.weaponSystem.switchWeapon(WEAPON_ORDER[slot]);
+      const allowedWeapons = this.selectedClass ? [this.selectedClass.primaryWeapon] : WEAPON_ORDER;
+      if (slot < allowedWeapons.length) {
+        this.weaponSystem.switchWeapon(allowedWeapons[slot]);
         this.weaponView.equipWeapon(this.weaponSystem.getCurrentWeapon());
         this.audioSystem.play(SoundType.UI_CLICK);
       }
@@ -1530,6 +1575,9 @@ export class GameScene {
   };
 
   private simulateFixedStep(dt: number, time: number): void {
+    this.roundFlow.update(dt);
+    if (!this.roundFlow.canSimulateCombat()) return;
+
     // 玩家更新
     if (this.player && !this.healthSystem.isDead && !this.inVehicle) {
       this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
@@ -1747,6 +1795,7 @@ export class GameScene {
     this.mainMenu?.dispose();
     this.settingsMenu?.dispose();
     this.scoreboard?.dispose();
+    this.deploymentMenu?.dispose();
     this.audioSystem?.dispose();
     this.weatherSystem?.dispose();
     this.vehicleSystem?.dispose();
