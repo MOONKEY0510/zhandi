@@ -6,6 +6,7 @@ export enum EquipmentType {
   FRAG_GRENADE = 'frag_grenade',
   MOLOTOV = 'molotov',
   DECOY = 'decoy',
+  PANZERFAUST = 'panzerfaust',
 }
 
 export interface EquipmentConfig {
@@ -76,6 +77,17 @@ export const EQUIPMENT_CONFIGS: Record<EquipmentType, EquipmentConfig> = {
     throwSpeed: 15,
     throwArc: 0.3,
   },
+  [EquipmentType.PANZERFAUST]: {
+    type: EquipmentType.PANZERFAUST,
+    name: '反坦克火箭',
+    maxCount: 2,
+    fuseTime: 999,
+    effectDuration: 0,
+    radius: 4.5,
+    damage: 300,
+    throwSpeed: 55,
+    throwArc: 0,
+  },
 };
 
 export class Equipment {
@@ -131,6 +143,8 @@ export class Equipment {
         return 0xff4400;
       case EquipmentType.DECOY:
         return 0x4444ff;
+      case EquipmentType.PANZERFAUST:
+        return 0x556633;
       default:
         return 0x888888;
     }

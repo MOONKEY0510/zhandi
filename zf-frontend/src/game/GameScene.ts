@@ -53,7 +53,15 @@ const EQUIPMENT_ORDER: EquipmentType[] = [
   EquipmentType.FRAG_GRENADE,
   EquipmentType.SMOKE_GRENADE,
   EquipmentType.FLASHBANG,
+  EquipmentType.PANZERFAUST,
 ];
+
+/** 反坦克火箭参数（阶段 7 反载具链） */
+const PANZERFAUST_SPEED = 55;
+const PANZERFAUST_RADIUS = 4.5;
+const PANZERFAUST_DAMAGE = 300;
+/** 火箭对载具伤害倍率（步兵反制坦克的核心） */
+const PANZERFAUST_VEHICLE_MULT = 3.5;
 
 interface Tracer { line: THREE.Line; life: number; maxLife: number; }
 interface Impact { mesh: THREE.Mesh; life: number; maxLife: number; }
@@ -64,8 +72,8 @@ interface VehicleProjectile {
   velocity: THREE.Vector3;
   life: number;
   maxLife: number;
-  kind: 'machinegun' | 'cannon';
-  owner: Vehicle;
+  kind: 'machinegun' | 'cannon' | 'rocket';
+  owner: Vehicle | null;
   hit: boolean;
 }
 
@@ -1057,6 +1065,13 @@ export class GameScene {
   private throwEquipment(): void {
     if (this.healthSystem.isDead) return;
     const type = EQUIPMENT_ORDER[this.currentEquipmentIndex];
+
+    // 反坦克火箭：直射弹道实体，不经过抛物线投掷管线（阶段 7 反载具链）
+    if (type === EquipmentType.PANZERFAUST) {
+      this.firePanzerfaust();
+      return;
+    }
+
     const pos = this.camera.getWorldPosition(this.tmpVec1).clone();
     const dir = this.tmpVec2;
     this.camera.getWorldDirection(dir);
@@ -1066,6 +1081,27 @@ export class GameScene {
       this.audioSystem.play(SoundType.UI_CLICK);
       this.hud.addKillMessage(`投掷 ${equipment.config.name}`, this.simulationTimeMs);
     }
+  }
+
+  /** 反坦克火箭：高速直射、命中即爆，对载具高倍率伤害（步兵反载具链） */
+  private firePanzerfaust(): void {
+    const pos = this.camera.getWorldPosition(this.tmpVec1).clone();
+    const dir = this.tmpVec2;
+    this.camera.getWorldDirection(dir);
+    dir.normalize();
+
+    this.vehicleProjectiles.push({
+      position: pos,
+      velocity: dir.clone().multiplyScalar(PANZERFAUST_SPEED),
+      life: 0,
+      maxLife: 2.5,
+      kind: 'rocket',
+      owner: null,
+      hit: false,
+    });
+    this.audioSystem.play(SoundType.GUNSHOT, pos);
+    this.player?.addShake(0.1, 5);
+    this.hud.addKillMessage('发射反坦克火箭', this.simulationTimeMs);
   }
 
   // ====== 载具 ======
@@ -1178,7 +1214,9 @@ export class GameScene {
       if (envHits.length > 0) {
         const hitPoint = envHits[0].point;
         if (p.kind === 'cannon') {
-          this.applyVehicleExplosion(hitPoint, p);
+          this.applyExplosion(hitPoint, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+        } else if (p.kind === 'rocket') {
+          this.applyExplosion(hitPoint, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
         } else {
           this.spawnImpact(hitPoint, envHits[0].face?.normal || dir);
           this.hitTargetWithProjectile(p, hitPoint);
@@ -1191,7 +1229,9 @@ export class GameScene {
       const entityHit = this.findProjectileEntityHit(p, prev, dir, travelled);
       if (entityHit) {
         if (p.kind === 'cannon') {
-          this.applyVehicleExplosion(entityHit, p);
+          this.applyExplosion(entityHit, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+        } else if (p.kind === 'rocket') {
+          this.applyExplosion(entityHit, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
         } else {
           this.spawnImpact(entityHit, dir);
           this.hitTargetWithProjectile(p, entityHit);
@@ -1202,7 +1242,11 @@ export class GameScene {
 
       // 寿命耗尽：主炮未命中则在当前位置爆炸（触地）
       if (p.life >= p.maxLife) {
-        if (p.kind === 'cannon') this.applyVehicleExplosion(p.position, p);
+        if (p.kind === 'cannon') {
+          this.applyExplosion(p.position, p.owner!.config.explosionRadius, p.owner!.config.weaponDamage, 1, p.owner);
+        } else if (p.kind === 'rocket') {
+          this.applyExplosion(p.position, PANZERFAUST_RADIUS, PANZERFAUST_DAMAGE, PANZERFAUST_VEHICLE_MULT);
+        }
         this.vehicleProjectiles.splice(i, 1);
       }
     }
@@ -1225,6 +1269,17 @@ export class GameScene {
       if (closest.distanceTo(bot.mesh.position) < 0.7) return closest;
     }
 
+    // 载具（简化为中心球体：取长宽最大半轴）
+    for (const vehicle of this.vehicleSystem.vehicles) {
+      if (vehicle.destroyed) continue;
+      const half = Math.max(vehicle.config.dimensions.width, vehicle.config.dimensions.length) / 2 + 0.3;
+      const toV = vehicle.mesh.position.clone().sub(start);
+      const t = toV.dot(dir);
+      if (t < 0 || t > step) continue;
+      const closest = start.clone().addScaledVector(dir, t);
+      if (closest.distanceTo(vehicle.mesh.position) < half) return closest;
+    }
+
     const playerPos = this.player?.getPosition();
     if (playerPos && !this.healthSystem.isDead) {
       const toP = this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z).sub(start);
@@ -1239,7 +1294,7 @@ export class GameScene {
 
   /** 机枪命中：对 Bot 造成直接伤害 */
   private hitTargetWithProjectile(p: VehicleProjectile, hitPoint: THREE.Vector3): void {
-    if (p.kind !== 'machinegun') return;
+    if (p.kind !== 'machinegun' || !p.owner) return;
     const damage = p.owner.config.weaponDamage;
     for (const bot of this.aiSystem.bots) {
       if (bot.state === 'dead') continue;
@@ -1253,11 +1308,14 @@ export class GameScene {
     }
   }
 
-  /** 主炮爆炸：AoE 伤害（Bot/玩家/其他载具）+ 四通道冲击 + 特效 + 破坏物 */
-  private applyVehicleExplosion(position: THREE.Vector3, p: VehicleProjectile): void {
-    const radius = p.owner.config.explosionRadius;
-    const maxDamage = p.owner.config.weaponDamage;
-
+  /** 主炮/火箭爆炸：AoE 伤害（Bot/玩家/其他载具）+ 四通道冲击 + 特效 + 破坏物 */
+  private applyExplosion(
+    position: THREE.Vector3,
+    radius: number,
+    maxDamage: number,
+    vehicleMultiplier = 1,
+    excludeVehicle: Vehicle | null = null
+  ): void {
     this.audioSystem.play(SoundType.EXPLOSION, position);
     this.spawnExplosionEffect(position.clone());
     this.spawnSmokeEffect(position.clone(), Math.max(3, radius * 0.8));
@@ -1284,12 +1342,16 @@ export class GameScene {
       }
     }
 
-    // 其他载具 AoE（不含发射者）
+    // 其他载具 AoE（反坦克火箭对载具高倍率；排除发射者）
     for (const vehicle of this.vehicleSystem.vehicles) {
-      if (vehicle === p.owner || vehicle.destroyed) continue;
+      if (vehicle === excludeVehicle || vehicle.destroyed) continue;
       const dist = vehicle.mesh.position.distanceTo(position);
       if (dist <= radius) {
-        const result = vehicle.takeDamage(maxDamage * 0.4 * Math.max(0.15, 1 - dist / radius), position, this.simulationTimeMs);
+        const result = vehicle.takeDamage(
+          maxDamage * 0.4 * vehicleMultiplier * Math.max(0.15, 1 - dist / radius),
+          position,
+          this.simulationTimeMs,
+        );
         if (result.killed) this.vehicleSystem.scheduleRespawn(vehicle);
       }
     }
