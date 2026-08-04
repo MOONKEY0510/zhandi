@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { gameplayRandom } from '../core/Random';
 import { TeamId } from '../game/ConquestMode';
+import { AIPerception } from './AIPerception';
+import { getAILodBudget } from './AILod';
 
 export enum AIState {
   PATROL = 'patrol',
@@ -117,6 +119,9 @@ export class AIBot {
   private avoidDirection = new THREE.Vector3();
   private stuckTimer = 0;
   private lastPosition = new THREE.Vector3();
+  private readonly perception = new AIPerception();
+  private nextPerceptionAt = 0;
+  private nextDecisionAt = 0;
 
   // 掩体
   private coverPosition: THREE.Vector3 | null = null;
@@ -525,6 +530,19 @@ export class AIBot {
     }
 
     const distanceToPlayer = this.mesh.position.distanceTo(playerPosition);
+    const visible = distanceToPlayer <= this.detectionRange;
+    const lod = getAILodBudget(distanceToPlayer, visible);
+    this.mesh.visible = lod.animate || visible;
+
+    if (currentTime >= this.nextPerceptionAt) {
+      this.nextPerceptionAt = currentTime + lod.perceptionIntervalMs;
+      this.perception.update(currentTime);
+      if (visible && this.team !== AIBot.playerTeam) {
+        this.perception.see('player', playerPosition, 1, currentTime);
+      }
+    }
+    if (currentTime < this.nextDecisionAt) return;
+    this.nextDecisionAt = currentTime + lod.decisionIntervalMs;
 
     // 反应时间
     if (this.target && !this.hasAcquiredTarget) {
