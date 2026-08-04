@@ -27,13 +27,14 @@ import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
-import { VehicleSystem, VehicleType } from '../vehicle/VehicleSystem';
+import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
 import { VISUAL_PROFILES, resolveVisualProfileId, colorTemperatureToRGB } from '../environment/VisualProfile';
 import { WeatherMaterialLink } from '../environment/WeatherMaterialLink';
 import { VfxPool, VfxType } from '../effects/VfxPool';
 import { ExplosionImpactSystem } from '../effects/ExplosionImpact';
 import { DynamicResolution } from '../performance/DynamicResolution';
+import { DestructibleSystem, DestructibleKind } from '../destruction/DestructibleSystem';
 import type { GameEvents } from './GameEvents';
 import { GameMode, GameModeType } from './GameMode';
 import { ConquestPresenter } from './ConquestPresenter';
@@ -56,6 +57,17 @@ const EQUIPMENT_ORDER: EquipmentType[] = [
 
 interface Tracer { line: THREE.Line; life: number; maxLife: number; }
 interface Impact { mesh: THREE.Mesh; life: number; maxLife: number; }
+
+/** 载具炮弹实体：位置/速度/寿命，主炮带重力与爆炸 */
+interface VehicleProjectile {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  life: number;
+  maxLife: number;
+  kind: 'machinegun' | 'cannon';
+  owner: Vehicle;
+  hit: boolean;
+}
 
 export class GameScene {
   private scene: THREE.Scene;
@@ -110,7 +122,11 @@ export class GameScene {
   // 载具
   private vehicleSystem!: VehicleSystem;
   private inVehicle = false;
-  private currentVehicle: { vehicle: import('../vehicle/VehicleSystem').Vehicle; isDriver: boolean } | null = null;
+  private currentVehicle: { vehicle: Vehicle; isDriver: boolean } | null = null;
+
+  // 载具炮弹实体（阶段 6/7：弹道 + 爆炸闭环）
+  private vehicleProjectiles: VehicleProjectile[] = [];
+  private projectileRaycaster = new THREE.Raycaster();
 
   // 天气
   private weatherSystem!: WeatherSystem;
@@ -142,6 +158,9 @@ export class GameScene {
 
   // 环境物体
   private environmentObjects: THREE.Object3D[] = [];
+
+  // 局部破坏（阶段 7）
+  private destructibleSystem!: DestructibleSystem;
 
   // 特效池
   private tracers: Tracer[] = [];
@@ -338,6 +357,14 @@ export class GameScene {
     this.mapManager.loadMap('berlin_ruins');
     this.environmentObjects = this.mapManager.getCollisionObjects();
 
+    // 局部破坏（阶段 7 P0）：预切片对象加入碰撞与 AI 视线，摧毁后移除
+    this.destructibleSystem = new DestructibleSystem(this.scene);
+    this.destructibleSystem.onDestroy = (obj) => {
+      const idx = this.environmentObjects.indexOf(obj.mesh);
+      if (idx >= 0) this.environmentObjects.splice(idx, 1);
+    };
+    this.spawnDestructibles();
+
     // 玩家
     this.player = new PlayerController(this.physicsWorld, this.camera);
     this.player.applySettings(loadGameSettings());
@@ -480,9 +507,32 @@ export class GameScene {
       new THREE.Vector3(-15, 1, -15),
     ];
     const vehicleCount = Math.min(this.config.benchmark.vehicleCount, spawnPositions.length);
+    const vehicleTypes = [VehicleType.JEEP, VehicleType.TANK];
 
     for (let index = 0; index < vehicleCount; index++) {
-      this.vehicleSystem.spawnVehicle(VehicleType.JEEP, spawnPositions[index]);
+      this.vehicleSystem.spawnVehicle(vehicleTypes[index % vehicleTypes.length], spawnPositions[index]);
+    }
+  }
+
+  /** 在地图散布可破坏对象（避开出生点/载具点），完整对象参与碰撞与 AI 视线 */
+  private spawnDestructibles(): void {
+    const placements: { kind: DestructibleKind; x: number; z: number; rotationY: number }[] = [
+      { kind: DestructibleKind.SANDBAG, x: 8, z: -22, rotationY: 0.4 },
+      { kind: DestructibleKind.SANDBAG, x: -9, z: 20, rotationY: -0.3 },
+      { kind: DestructibleKind.COVER, x: 24, z: -6, rotationY: 0.8 },
+      { kind: DestructibleKind.COVER, x: -25, z: 8, rotationY: -0.6 },
+      { kind: DestructibleKind.FENCE, x: 30, z: 22, rotationY: 1.2 },
+      { kind: DestructibleKind.FENCE, x: -30, z: -20, rotationY: -1.1 },
+      { kind: DestructibleKind.DOOR, x: 6, z: 28, rotationY: 0 },
+      { kind: DestructibleKind.DOOR, x: -6, z: -28, rotationY: 0 },
+    ];
+    for (const placement of placements) {
+      const obj = this.destructibleSystem.create(
+        placement.kind,
+        new THREE.Vector3(placement.x, 0, placement.z),
+        placement.rotationY,
+      );
+      this.environmentObjects.push(obj.mesh);
     }
   }
 
@@ -511,6 +561,15 @@ export class GameScene {
       if (slot < EQUIPMENT_ORDER.length) {
         this.currentEquipmentIndex = slot;
         this.audioSystem.play(SoundType.UI_CLICK);
+      }
+    });
+
+    this.inputManager.onSeatSwitch(() => {
+      if (!this.inVehicle || !this.currentVehicle) return;
+      const vehicle = this.currentVehicle.vehicle;
+      if (vehicle.switchSeat(this.playerId)) {
+        this.currentVehicle.isDriver = vehicle.getSeatIndexOf(this.playerId) === 0;
+        this.hud.addKillMessage(`切换到${vehicle.getSeatLabel(this.playerId)}`, this.simulationTimeMs);
       }
     });
 
@@ -1024,14 +1083,14 @@ export class GameScene {
       const playerVec = this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z);
 
       for (const vehicle of this.vehicleSystem.vehicles) {
-        if (vehicle.health <= 0) continue;
+        if (vehicle.destroyed) continue;
         const dist = vehicle.mesh.position.distanceTo(playerVec);
         if (dist < 4) {
-          const isDriver = !vehicle.isOccupied;
-          if (vehicle.enterVehicle(this.playerId, isDriver)) {
+          const seat = vehicle.enterVehicle(this.playerId);
+          if (seat) {
             this.inVehicle = true;
-            this.currentVehicle = { vehicle, isDriver };
-            this.hud.addKillMessage(`进入 ${vehicle.config.name}`, this.simulationTimeMs);
+            this.currentVehicle = { vehicle, isDriver: seat === 'driver' };
+            this.hud.addKillMessage(`进入 ${vehicle.config.name}（${seat === 'driver' ? '驾驶' : '乘坐'}）`, this.simulationTimeMs);
             break;
           }
         }
@@ -1039,10 +1098,21 @@ export class GameScene {
     }
   }
 
-  private updateVehicleControl(_dt: number): void {
+  private updateVehicleControl(dt: number): void {
     if (!this.inVehicle || !this.currentVehicle) return;
     const vehicle = this.currentVehicle.vehicle;
-    if (!this.currentVehicle.isDriver) return;
+
+    // 被摧毁：强制逃生
+    if (vehicle.destroyed) {
+      this.currentVehicle = null;
+      this.inVehicle = false;
+      this.hud.addKillMessage('载具被摧毁，你已脱离', this.simulationTimeMs);
+      if (!this.healthSystem.isDead) {
+        this.healthSystem.takeDamage(40, this.simulationTimeMs);
+        this.player?.addShake(0.25, 8);
+      }
+      return;
+    }
 
     const input = this.inputManager.state;
     let forward = 0;
@@ -1053,17 +1123,204 @@ export class GameScene {
     if (input.left) turn = 1;
     if (input.right) turn = -1;
 
-    vehicle.drive(forward, turn);
+    if (this.currentVehicle.isDriver) {
+      vehicle.drive(forward, turn, dt);
 
-    // 载具武器射击
-    if (input.fire) {
-      vehicle.fireWeapon();
+      // 炮塔朝向准星方向（相机 yaw），主炮联动
+      vehicle.setTurretTargetYaw(this.camera.rotation.y);
+
+      // 载具武器射击 → 弹道实体
+      if (input.fire) {
+        const shot = vehicle.fireWeapon(this.simulationTimeMs);
+        if (shot) this.spawnVehicleProjectile(shot);
+      }
     }
 
     // 同步相机到载具
     const vpos = vehicle.mesh.position;
     this.camera.position.set(vpos.x, vpos.y + 3, vpos.z + 6);
     this.camera.lookAt(vpos.x, vpos.y, vpos.z);
+  }
+
+  // ====== 载具武器弹道（阶段 6/7） ======
+  private spawnVehicleProjectile(shot: VehicleShot): void {
+    if (shot.kind === 'none') return;
+    const speed = shot.kind === 'cannon' ? 60 : 140;
+    this.vehicleProjectiles.push({
+      position: shot.origin.clone(),
+      velocity: shot.direction.clone().multiplyScalar(speed),
+      life: 0,
+      maxLife: shot.kind === 'cannon' ? 3 : 1.2,
+      kind: shot.kind,
+      owner: shot.owner,
+      hit: false,
+    });
+    this.audioSystem.play(SoundType.GUNSHOT, shot.origin);
+  }
+
+  private updateVehicleProjectiles(dt: number): void {
+    if (this.vehicleProjectiles.length === 0) return;
+
+    for (let i = this.vehicleProjectiles.length - 1; i >= 0; i--) {
+      const p = this.vehicleProjectiles[i];
+      p.life += dt;
+      if (p.kind === 'cannon') p.velocity.y -= 9.8 * dt;
+
+      const prev = p.position.clone();
+      p.position.addScaledVector(p.velocity, dt);
+      const travelled = p.position.distanceTo(prev);
+      const dir = p.velocity.clone().normalize();
+
+      // 环境命中
+      this.projectileRaycaster.set(prev, dir);
+      this.projectileRaycaster.far = travelled + 0.2;
+      const envHits = this.projectileRaycaster.intersectObjects(this.environmentObjects, true);
+      if (envHits.length > 0) {
+        const hitPoint = envHits[0].point;
+        if (p.kind === 'cannon') {
+          this.applyVehicleExplosion(hitPoint, p);
+        } else {
+          this.spawnImpact(hitPoint, envHits[0].face?.normal || dir);
+          this.hitTargetWithProjectile(p, hitPoint);
+        }
+        this.vehicleProjectiles.splice(i, 1);
+        continue;
+      }
+
+      // 实体命中（球体距离检测）
+      const entityHit = this.findProjectileEntityHit(p, prev, dir, travelled);
+      if (entityHit) {
+        if (p.kind === 'cannon') {
+          this.applyVehicleExplosion(entityHit, p);
+        } else {
+          this.spawnImpact(entityHit, dir);
+          this.hitTargetWithProjectile(p, entityHit);
+        }
+        this.vehicleProjectiles.splice(i, 1);
+        continue;
+      }
+
+      // 寿命耗尽：主炮未命中则在当前位置爆炸（触地）
+      if (p.life >= p.maxLife) {
+        if (p.kind === 'cannon') this.applyVehicleExplosion(p.position, p);
+        this.vehicleProjectiles.splice(i, 1);
+      }
+    }
+  }
+
+  private findProjectileEntityHit(
+    p: VehicleProjectile,
+    start: THREE.Vector3,
+    dir: THREE.Vector3,
+    step: number
+  ): THREE.Vector3 | null {
+    if (step < 0.001) return null;
+
+    for (const bot of this.aiSystem.bots) {
+      if (bot.state === 'dead') continue;
+      const toBot = bot.mesh.position.clone().sub(start);
+      const t = toBot.dot(dir);
+      if (t < 0 || t > step) continue;
+      const closest = start.clone().addScaledVector(dir, t);
+      if (closest.distanceTo(bot.mesh.position) < 0.7) return closest;
+    }
+
+    const playerPos = this.player?.getPosition();
+    if (playerPos && !this.healthSystem.isDead) {
+      const toP = this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z).sub(start);
+      const t = toP.dot(dir);
+      if (t >= 0 && t <= step) {
+        const closest = start.clone().addScaledVector(dir, t);
+        if (closest.distanceTo(this.tmpVec1) < 0.6) return closest;
+      }
+    }
+    return null;
+  }
+
+  /** 机枪命中：对 Bot 造成直接伤害 */
+  private hitTargetWithProjectile(p: VehicleProjectile, hitPoint: THREE.Vector3): void {
+    if (p.kind !== 'machinegun') return;
+    const damage = p.owner.config.weaponDamage;
+    for (const bot of this.aiSystem.bots) {
+      if (bot.state === 'dead') continue;
+      if (bot.mesh.position.distanceTo(hitPoint) < 0.7) {
+        bot.takeDamage(damage, hitPoint, this.simulationTimeMs);
+        this.audioSystem.play(SoundType.HIT);
+        this.spawnBloodEffect(hitPoint, 15);
+        this.hitMarkerTime = this.simulationTimeMs;
+        break;
+      }
+    }
+  }
+
+  /** 主炮爆炸：AoE 伤害（Bot/玩家/其他载具）+ 四通道冲击 + 特效 + 破坏物 */
+  private applyVehicleExplosion(position: THREE.Vector3, p: VehicleProjectile): void {
+    const radius = p.owner.config.explosionRadius;
+    const maxDamage = p.owner.config.weaponDamage;
+
+    this.audioSystem.play(SoundType.EXPLOSION, position);
+    this.spawnExplosionEffect(position.clone());
+    this.spawnSmokeEffect(position.clone(), Math.max(3, radius * 0.8));
+
+    // Bot AoE
+    for (const bot of this.aiSystem.bots) {
+      if (bot.state === 'dead') continue;
+      const dist = bot.mesh.position.distanceTo(position);
+      if (dist <= radius) {
+        const damage = maxDamage * 0.5 * Math.max(0.15, 1 - dist / radius);
+        bot.takeDamage(damage, position, this.simulationTimeMs);
+      }
+    }
+
+    // 玩家 AoE
+    const playerPos = this.player?.getPosition();
+    if (playerPos && !this.healthSystem.isDead) {
+      const dist = this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z).distanceTo(position);
+      if (dist <= radius) {
+        const damage = maxDamage * 0.5 * Math.max(0.15, 1 - dist / radius);
+        if (this.healthSystem.takeDamage(damage, this.simulationTimeMs)) {
+          this.handlePlayerDeath(this.simulationTimeMs);
+        }
+      }
+    }
+
+    // 其他载具 AoE（不含发射者）
+    for (const vehicle of this.vehicleSystem.vehicles) {
+      if (vehicle === p.owner || vehicle.destroyed) continue;
+      const dist = vehicle.mesh.position.distanceTo(position);
+      if (dist <= radius) {
+        const result = vehicle.takeDamage(maxDamage * 0.4 * Math.max(0.15, 1 - dist / radius), position, this.simulationTimeMs);
+        if (result.killed) this.vehicleSystem.scheduleRespawn(vehicle);
+      }
+    }
+
+    // 爆炸冲击四通道（预算限幅）
+    if (playerPos) {
+      const result = this.explosionImpact.trigger(
+        { x: position.x, y: position.y, z: position.z },
+        { x: playerPos.x, y: playerPos.y, z: playerPos.z },
+        this.simulationTimeMs,
+      );
+      if (result.shakeAmplitude > 0) this.player?.addShake(result.shakeAmplitude * 0.2, 5);
+      if (result.tinnitus) this.audioSystem.play(SoundType.TINNITUS, undefined, result.tinnitusIntensity * 0.5);
+      if (result.impulse > 0) {
+        for (const bot of this.aiSystem.bots) {
+          if (bot.state === 'dead') continue;
+          if (bot.mesh.position.distanceTo(position) <= radius) bot.takeDamage(0, position, this.simulationTimeMs);
+        }
+      }
+      if (result.dust) this.spawnDustEffect(position.clone());
+    }
+
+    // 破坏物 AoE（阶段 7）
+    for (const d of this.destructibleSystem.getAll()) {
+      if (d.destroyed) continue;
+      if (d.mesh.position.distanceTo(position) <= radius) {
+        if (this.destructibleSystem.damage(d.id, maxDamage, position)) {
+          this.hud.addKillMessage(`${d.config.name} 被炸毁`, this.simulationTimeMs);
+        }
+      }
+    }
   }
 
   // ====== 射击 ======
@@ -1106,7 +1363,11 @@ export class GameScene {
     direction.y += (gameplayRandom() - 0.5) * spread * 0.05;
     direction.normalize();
 
-    const targets = [...this.aiSystem.getAllTargetableMeshes(), ...this.environmentObjects];
+    const targets = [
+      ...this.aiSystem.getAllTargetableMeshes(),
+      ...this.environmentObjects,
+      ...this.vehicleSystem.vehicles.filter((v) => !v.destroyed).map((v) => v.mesh),
+    ];
     const hitInfo = this.raycast.cast(direction, config.range, targets);
 
     const endPoint = this.tmpVec3.copy(origin).addScaledVector(direction, config.range);
@@ -1122,7 +1383,7 @@ export class GameScene {
   }
 
   private processHit(
-    hitInfo: { point?: THREE.Vector3; distance?: number; target?: THREE.Object3D; isHeadshot?: boolean; bodyPart?: 'head' | 'torso' | 'limb' },
+    hitInfo: { point?: THREE.Vector3; normal?: THREE.Vector3; distance?: number; target?: THREE.Object3D; isHeadshot?: boolean; bodyPart?: 'head' | 'torso' | 'limb' },
     config: {
       damage: number;
       minDamage: number;
@@ -1131,8 +1392,63 @@ export class GameScene {
       headshotMultiplier: number;
       range: number;
     },
-    currentTime: number
+    currentTime: number,
+    _direction?: THREE.Vector3
   ): void {
+    // 载具命中（阶段 7）：模块化伤害 + 装甲修正，摧毁后登记重生
+    let hitVehicle: Vehicle | null = null;
+    if (hitInfo.target) {
+      let obj: THREE.Object3D | null = hitInfo.target;
+      while (obj) {
+        for (const vehicle of this.vehicleSystem.vehicles) {
+          if (obj === vehicle.mesh) {
+            hitVehicle = vehicle;
+            break;
+          }
+        }
+        if (hitVehicle) break;
+        obj = obj.parent;
+      }
+    }
+    if (hitVehicle) {
+      const result = hitVehicle.takeDamage(config.damage, hitInfo.point, currentTime);
+      this.hitMarkerTime = currentTime;
+      this.audioSystem.play(SoundType.HIT);
+      if (hitInfo.point) this.spawnImpact(hitInfo.point, hitInfo.normal || _direction || new THREE.Vector3());
+      if (result.killed) {
+        this.vehicleSystem.scheduleRespawn(hitVehicle);
+        this.hud.addKillMessage(`${hitVehicle.config.name} 被摧毁（${result.direction}部）`, currentTime);
+        this.spawnExplosionEffect(hitVehicle.mesh.position.clone());
+        this.spawnSmokeEffect(hitVehicle.mesh.position.clone(), 6);
+        if (this.currentVehicle?.vehicle === hitVehicle) {
+          this.currentVehicle = null;
+          this.inVehicle = false;
+        }
+      }
+      return;
+    }
+
+    // 可破坏物命中（阶段 7）：摧毁后移出碰撞与 AI 视线
+    if (hitInfo.target) {
+      let obj: THREE.Object3D | null = hitInfo.target;
+      while (obj) {
+        const destructibleId = (obj.userData as { destructibleId?: number } | undefined)?.destructibleId;
+        if (typeof destructibleId === 'number') {
+          const destroyed = this.destructibleSystem.damage(destructibleId, config.damage, hitInfo.point);
+          if (hitInfo.point) this.spawnImpact(hitInfo.point, hitInfo.normal || _direction || new THREE.Vector3());
+          if (destroyed) {
+            const dObj = this.destructibleSystem.getById(destructibleId);
+            this.hud.addKillMessage(`${dObj?.config.name ?? '掩体'} 被摧毁`, currentTime);
+            this.audioSystem.play(SoundType.EXPLOSION, hitInfo.point);
+          } else {
+            this.audioSystem.play(SoundType.HIT);
+          }
+          return;
+        }
+        obj = obj.parent;
+      }
+    }
+
     let hitBot: AIBot | null = null;
     if (hitInfo.target) {
       let obj: THREE.Object3D | null = hitInfo.target;
@@ -1780,7 +2096,11 @@ export class GameScene {
 
     // 载具控制
     this.updateVehicleControl(dt);
-    this.vehicleSystem.update(dt);
+    this.vehicleSystem.update(dt, this.simulationTimeMs);
+    this.updateVehicleProjectiles(dt);
+
+    // 局部破坏
+    this.destructibleSystem.update(dt);
 
     // 武器
     this.weaponSystem.update(time);
@@ -1879,7 +2199,7 @@ export class GameScene {
       const playerPos = this.player?.getPosition();
       if (playerPos) {
         for (const vehicle of this.vehicleSystem.vehicles) {
-          if (vehicle.health > 0) {
+          if (!vehicle.destroyed) {
             const dist = vehicle.mesh.position.distanceTo(this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z));
             if (dist < 4) {
               interactionPrompt = `按 E 进入 ${vehicle.config.name}`;
@@ -1959,7 +2279,12 @@ export class GameScene {
 
     if (time - this.lastPerformanceCapture >= this.config.performance.panelRefreshIntervalMs) {
       const snapshot = this.performanceMonitor.capture(time);
-      this.performancePanel.update(snapshot, this.config.benchmark.enabled);
+      const voiceStats = this.audioVoiceManager.getStats();
+      this.performancePanel.update(snapshot, this.config.benchmark.enabled, {
+        voicesReal: voiceStats.real,
+        voicesVirtual: voiceStats.virtual,
+        vfxActive: this.vfxPool.getActiveCount(),
+      });
       this.lastPerformanceCapture = time;
     }
   }
@@ -1999,7 +2324,9 @@ export class GameScene {
     this.vfxPool.dispose();
     this.audioVoiceManager.dispose();
     this.weatherMaterialLink.clear();
+    this.vehicleProjectiles = [];
     this.vehicleSystem?.dispose();
+    this.destructibleSystem?.dispose();
     this.equipmentSystem?.dispose();
     this.mapManager?.dispose();
     this.performancePanel.dispose();

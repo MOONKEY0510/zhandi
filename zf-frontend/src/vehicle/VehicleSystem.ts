@@ -8,6 +8,17 @@ export enum VehicleType {
   MOTORCYCLE = 'motorcycle',
 }
 
+/** 载具武器类别：机枪（直射/快速）、主炮（弹道/爆炸） */
+export type VehicleWeaponKind = 'machinegun' | 'cannon' | 'none';
+
+/** 模块化伤害部位（阶段 7 P0） */
+export enum VehicleDamagePart {
+  HULL = 'hull',
+  TRACKS = 'tracks',
+  TURRET = 'turret',
+  ENGINE = 'engine',
+}
+
 export interface VehicleConfig {
   type: VehicleType;
   name: string;
@@ -18,6 +29,15 @@ export interface VehicleConfig {
   armor: number;
   seats: number;
   weaponMount: boolean;
+  weaponKind: VehicleWeaponKind;
+  weaponDamage: number;
+  weaponRange: number;
+  /** 发射间隔 ms */
+  fireIntervalMs: number;
+  /** 最大弹药量 */
+  ammo: number;
+  /** 主炮爆炸半径（m），机枪为 0 */
+  explosionRadius: number;
   mass: number;
   dimensions: { width: number; height: number; length: number };
 }
@@ -33,6 +53,12 @@ export const VEHICLE_CONFIGS: Record<VehicleType, VehicleConfig> = {
     armor: 0.3,
     seats: 4,
     weaponMount: true,
+    weaponKind: 'machinegun',
+    weaponDamage: 14,
+    weaponRange: 200,
+    fireIntervalMs: 120,
+    ammo: 400,
+    explosionRadius: 0,
     mass: 1500,
     dimensions: { width: 2, height: 1.8, length: 4 },
   },
@@ -46,6 +72,12 @@ export const VEHICLE_CONFIGS: Record<VehicleType, VehicleConfig> = {
     armor: 0.8,
     seats: 3,
     weaponMount: true,
+    weaponKind: 'cannon',
+    weaponDamage: 120,
+    weaponRange: 500,
+    fireIntervalMs: 1500,
+    ammo: 30,
+    explosionRadius: 7,
     mass: 8000,
     dimensions: { width: 3.5, height: 2.5, length: 6 },
   },
@@ -59,6 +91,12 @@ export const VEHICLE_CONFIGS: Record<VehicleType, VehicleConfig> = {
     armor: 0.4,
     seats: 6,
     weaponMount: false,
+    weaponKind: 'none',
+    weaponDamage: 0,
+    weaponRange: 0,
+    fireIntervalMs: 0,
+    ammo: 0,
+    explosionRadius: 0,
     mass: 3000,
     dimensions: { width: 2.5, height: 2.8, length: 7 },
   },
@@ -72,9 +110,61 @@ export const VEHICLE_CONFIGS: Record<VehicleType, VehicleConfig> = {
     armor: 0.1,
     seats: 2,
     weaponMount: false,
+    weaponKind: 'none',
+    weaponDamage: 0,
+    weaponRange: 0,
+    fireIntervalMs: 0,
+    ammo: 0,
+    explosionRadius: 0,
     mass: 200,
     dimensions: { width: 0.8, height: 1.2, length: 2 },
   },
+};
+
+export interface VehiclePartState {
+  health: number;
+  maxHealth: number;
+  destroyed: boolean;
+}
+
+export type VehicleHitDirection = 'front' | 'side' | 'rear';
+
+export interface VehicleHitResult {
+  damage: number;
+  part: VehicleDamagePart;
+  direction: VehicleHitDirection;
+  killed: boolean;
+}
+
+export interface VehicleShot {
+  kind: VehicleWeaponKind;
+  /** 炮口世界坐标 */
+  origin: THREE.Vector3;
+  /** 炮口朝向（世界） */
+  direction: THREE.Vector3;
+  damage: number;
+  range: number;
+  explosionRadius: number;
+  owner: Vehicle;
+}
+
+export interface VehicleSeatInfo {
+  index: number;
+  label: string;
+  occupant: string | null;
+}
+
+interface GroundProbeResult {
+  hit: boolean;
+  groundY: number;
+}
+
+const PART_HEALTH_FACTORS: Record<VehicleDamagePart, number> = {
+  // 部位血量 = 整车血量 × 系数：部件在整车被摧毁前即可失效
+  [VehicleDamagePart.HULL]: 1,
+  [VehicleDamagePart.TRACKS]: 0.3,
+  [VehicleDamagePart.TURRET]: 0.25,
+  [VehicleDamagePart.ENGINE]: 0.4,
 };
 
 export class Vehicle {
@@ -86,18 +176,63 @@ export class Vehicle {
   currentSpeed: number = 0;
   currentTurn: number = 0;
   isOccupied: boolean = false;
-  driver: string | null = null;
-  passengers: string[] = [];
-  weapon: THREE.Mesh | null = null;
-  turretRotation: number = 0;
-  lastFireTime: number = 0;
+  destroyed: boolean = false;
+  ammo: number;
+  lastFireTime: number = Number.NEGATIVE_INFINITY;
+  lastDamageTime: number = 0;
+
+  /** 模块化伤害状态（阶段 7） */
+  partStates: Record<VehicleDamagePart, VehiclePartState>;
+  private currentMaxSpeed: number;
+  private currentTurnSpeed: number;
+
+  /** 座位槽位：0 = 驾驶员，其余为乘客 */
+  private seats: (string | null)[] = [];
+  private seatLabels: string[] = [];
+
+  /** 炮塔组（含炮管），主炮旋转用 */
+  private turretGroup: THREE.Group | null = null;
+  /** 炮塔当前 yaw（相对车体） */
+  private turretYaw = 0;
+  /** 炮塔目标 yaw，平滑逼近 */
+  private turretTargetYaw = 0;
+  /** 炮塔被摧毁后禁用武器 */
+  private weaponDisabled = false;
+
+  /** 重生数据：初始位置与朝向 */
+  readonly spawnPosition: THREE.Vector3;
+  private spawnRotationY = 0;
 
   constructor(scene: THREE.Scene, type: VehicleType, position: THREE.Vector3) {
     this.config = VEHICLE_CONFIGS[type];
     this.health = this.config.health;
+    this.ammo = this.config.ammo;
+    this.currentMaxSpeed = this.config.maxSpeed;
+    this.currentTurnSpeed = this.config.turnSpeed;
+
+    this.partStates = {
+      [VehicleDamagePart.HULL]: this.createPart(PART_HEALTH_FACTORS[VehicleDamagePart.HULL]),
+      [VehicleDamagePart.TRACKS]: this.createPart(PART_HEALTH_FACTORS[VehicleDamagePart.TRACKS]),
+      [VehicleDamagePart.TURRET]: this.createPart(PART_HEALTH_FACTORS[VehicleDamagePart.TURRET]),
+      [VehicleDamagePart.ENGINE]: this.createPart(PART_HEALTH_FACTORS[VehicleDamagePart.ENGINE]),
+    };
+
+    // 座位槽：司机 + 乘客
+    this.seats = Array.from({ length: Math.max(1, this.config.seats) }, () => null);
+    this.seatLabels = ['驾驶员'];
+    for (let i = 1; i < this.seats.length; i++) {
+      this.seatLabels.push(`座位${i}`);
+    }
+
     this.mesh = this.createVehicleMesh();
     this.mesh.position.copy(position);
+    this.spawnPosition = position.clone();
+    this.spawnRotationY = 0;
     scene.add(this.mesh);
+  }
+
+  private createPart(factor: number): VehiclePartState {
+    return { health: this.config.health * factor, maxHealth: this.config.health * factor, destroyed: false };
   }
 
   private createVehicleMesh(): THREE.Group {
@@ -139,19 +274,23 @@ export class Vehicle {
     }
 
     if (this.config.weaponMount) {
+      // 炮塔组：旋转该组即可联动炮管
+      const turretGroup = new THREE.Group();
       const turretGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.5, 16);
       const turretMaterial = new THREE.MeshStandardMaterial({ color: 0x3a4a2a });
       const turret = new THREE.Mesh(turretGeometry, turretMaterial);
       turret.position.y = this.config.dimensions.height + 0.25;
-      group.add(turret);
+      turretGroup.add(turret);
 
       const barrelGeometry = new THREE.CylinderGeometry(0.1, 0.1, 2, 8);
       const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2a });
       const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
       barrel.rotation.x = Math.PI / 2;
       barrel.position.set(0, this.config.dimensions.height + 0.25, 1);
-      group.add(barrel);
+      turretGroup.add(barrel);
 
+      group.add(turretGroup);
+      this.turretGroup = turretGroup;
       this.weapon = barrel;
     }
 
@@ -159,6 +298,7 @@ export class Vehicle {
   }
 
   createPhysicsBody(world: RAPIER.World): void {
+    this.world = world;
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(this.mesh.position.x, this.mesh.position.y, this.mesh.position.z)
       .setLinearDamping(0.5)
@@ -177,101 +317,340 @@ export class Vehicle {
     this.collider = world.createCollider(colliderDesc, this.body);
   }
 
-  update(_deltaTime: number): void {
+  private world: RAPIER.World | null = null;
+  weapon: THREE.Mesh | null = null;
+
+  /** 向下射线探测地面高度（排除自身碰撞体） */
+  private raycastGround(x: number, y: number, z: number, maxDistance = 6): GroundProbeResult {
+    if (!this.world) return { hit: false, groundY: y - 0.5 };
+    const ray = new RAPIER.Ray(new RAPIER.Vector3(x, y + 0.5, z), new RAPIER.Vector3(0, -1, 0));
+    const hit = this.world.castRay(ray, maxDistance, true, undefined, undefined, this.collider ?? undefined, this.body ?? undefined);
+    if (!hit) return { hit: false, groundY: y - 0.5 };
+    return { hit: true, groundY: y + 0.5 - hit.timeOfImpact };
+  }
+
+  private getForward(): THREE.Vector3 {
+    return new THREE.Vector3(0, 0, -1).applyQuaternion(this.mesh.quaternion);
+  }
+
+  update(deltaTime: number, nowMs: number): void {
     if (!this.body) return;
+    if (this.destroyed) return;
 
+    // ===== 运动学地面控制（阶段 7 P0）：防穿地 / 防翻车 / 横向钳制 =====
     const pos = this.body.translation();
-    const rot = this.body.rotation();
+    const probe = this.raycastGround(pos.x, pos.y, pos.z);
+    if (probe.hit) {
+      const targetY = probe.groundY + 0.35;
+      if (pos.y < targetY - 0.02) {
+        this.body.setTranslation(new RAPIER.Vector3(pos.x, targetY, pos.z), true);
+      }
+      const vel = this.body.linvel();
+      if (vel.y < -0.5) {
+        this.body.setLinvel(new RAPIER.Vector3(vel.x, 0, vel.z), true);
+      }
+    }
 
-    this.mesh.position.set(pos.x, pos.y, pos.z);
-    this.mesh.rotation.set(rot.x, rot.y, rot.z);
+    // 防翻车：车身倾斜过大时回正（只保留 yaw），同时清零俯仰/横滚角速度
+    const rot = this.body.rotation();
+    const q = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+    const euler = new THREE.Euler().setFromQuaternion(q);
+    if (Math.abs(euler.x) > 0.35 || Math.abs(euler.z) > 0.35) {
+      const yawOnly = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), euler.y);
+      this.body.setRotation(new RAPIER.Quaternion(yawOnly.x, yawOnly.y, yawOnly.z, yawOnly.w), true);
+      const ang = this.body.angvel();
+      this.body.setAngvel(new RAPIER.Vector3(0, ang.y, 0), true);
+    }
+
+    // 横向速度钳制：把速度分解为前向/横向，横向强阻尼
+    const forward = this.getForward();
+    forward.y = 0;
+    if (forward.lengthSq() > 0.0001) forward.normalize();
+    const vel2 = this.body.linvel();
+    const v = new THREE.Vector3(vel2.x, vel2.y, vel2.z);
+    const forwardSpeed = v.dot(forward);
+    const lateral = v.clone().addScaledVector(forward, -forwardSpeed);
+    if (lateral.lengthSq() > 1) {
+      const damped = v.addScaledVector(lateral, -0.08);
+      this.body.setLinvel(new RAPIER.Vector3(damped.x, damped.y, damped.z), true);
+    }
+
+    // 同步 mesh
+    const p2 = this.body.translation();
+    const r2 = this.body.rotation();
+    this.mesh.position.set(p2.x, p2.y, p2.z);
+    this.mesh.rotation.set(r2.x, r2.y, r2.z);
 
     const velocity = this.body.linvel();
     this.currentSpeed = Math.sqrt(velocity.x ** 2 + velocity.z ** 2);
+
+    // 炮塔平滑旋转
+    if (this.turretGroup) {
+      this.turretYaw += (this.turretTargetYaw - this.turretYaw) * Math.min(1, deltaTime * 4);
+      this.turretGroup.rotation.y = this.turretYaw;
+    }
+
+    // 自动维修 + 弹药缓慢补充（简化维修闭环）
+    if (nowMs - this.lastDamageTime > 5000) {
+      if (this.health < this.config.health) {
+        this.health = Math.min(this.config.health, this.health + 1.5 * deltaTime);
+      }
+      if (this.ammo < this.config.ammo) {
+        this.ammo = Math.min(this.config.ammo, this.ammo + 0.8 * deltaTime);
+      }
+    }
   }
 
-  drive(forward: number, turn: number): void {
-    if (!this.body) return;
+  /** 驱动：前向力 + 转向扭矩（受部位损坏影响） */
+  drive(forward: number, turn: number, deltaTime: number): void {
+    if (!this.body || this.destroyed) return;
 
-    const speed = this.currentSpeed;
-    const maxSpeed = this.config.maxSpeed;
+    const forwardVec = this.getForward();
+    forwardVec.y = 0;
+    if (forwardVec.lengthSq() > 0.0001) forwardVec.normalize();
 
-    if (Math.abs(speed) < maxSpeed) {
-      const force = forward * this.config.acceleration * this.config.mass;
-      const direction = new THREE.Vector3(0, 0, -1).applyEuler(this.mesh.rotation);
-      this.body.applyImpulse(new RAPIER.Vector3(
-        direction.x * force,
-        0,
-        direction.z * force
-      ), true);
+    const vel = this.body.linvel();
+    const v = new THREE.Vector3(vel.x, vel.y, vel.z);
+    const forwardSpeed = v.dot(forwardVec);
+
+    if (Math.abs(forwardSpeed) < this.currentMaxSpeed) {
+      const force = forward * this.config.acceleration * this.config.mass * Math.min(1, deltaTime * 2);
+      this.body.applyImpulse(
+        new RAPIER.Vector3(forwardVec.x * force, 0, forwardVec.z * force),
+        true,
+      );
     }
 
     if (Math.abs(turn) > 0.1) {
-      const torque = turn * this.config.turnSpeed * this.config.mass;
+      const torque = turn * this.currentTurnSpeed * this.config.mass * Math.min(1, deltaTime * 2);
       this.body.applyTorqueImpulse(new RAPIER.Vector3(0, torque, 0), true);
     }
   }
 
-  fireWeapon(): void {
-    if (!this.weapon || !this.config.weaponMount) return;
-
-    const now = Date.now();
-    if (now - this.lastFireTime < 500) return;
-    this.lastFireTime = now;
-
-    const muzzleFlash = new THREE.PointLight(0xffaa00, 5, 10);
-    muzzleFlash.position.copy(this.weapon.position);
-    muzzleFlash.position.z += 1;
-    this.mesh.add(muzzleFlash);
-
-    setTimeout(() => {
-      this.mesh.remove(muzzleFlash);
-    }, 50);
+  /** 设置炮塔目标角度（相对车体前向），载具内瞄准用 */
+  setTurretTargetYaw(worldYaw: number): void {
+    if (!this.turretGroup) return;
+    const bodyYaw = this.mesh.rotation.y;
+    let relative = worldYaw - bodyYaw;
+    // 归一化到 [-PI, PI]
+    while (relative > Math.PI) relative -= Math.PI * 2;
+    while (relative < -Math.PI) relative += Math.PI * 2;
+    this.turretTargetYaw = relative;
   }
 
-  takeDamage(amount: number): boolean {
-    const actualDamage = amount * (1 - this.config.armor);
-    this.health -= actualDamage;
+  /** 开火：返回弹道发射参数；弹药/装填/炮塔损坏时返回 null */
+  fireWeapon(nowMs: number): VehicleShot | null {
+    if (!this.weapon || !this.config.weaponMount || this.weaponDisabled) return null;
+    if (nowMs - this.lastFireTime < this.config.fireIntervalMs) return null;
+    if (this.ammo <= 0) return null;
 
-    if (this.health <= 0) {
-      this.destroy();
-      return true;
-    }
-    return false;
-  }
+    this.lastFireTime = nowMs;
+    this.ammo = Math.max(0, this.ammo - 1);
 
-  destroy(): void {
-    if (this.body) {
-      this.body.setEnabled(false);
-    }
+    const muzzle = new THREE.Vector3();
+    this.weapon.getWorldPosition(muzzle);
 
-    this.mesh.visible = false;
-    this.isOccupied = false;
-    this.driver = null;
-    this.passengers = [];
-  }
-
-  enterVehicle(playerId: string, isDriver: boolean): boolean {
-    if (this.isOccupied && isDriver) return false;
-
-    if (isDriver) {
-      this.driver = playerId;
-      this.isOccupied = true;
+    let direction: THREE.Vector3;
+    if (this.turretGroup) {
+      const q = new THREE.Quaternion();
+      this.turretGroup.getWorldQuaternion(q);
+      direction = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
     } else {
-      if (this.passengers.length >= this.config.seats - 1) return false;
-      this.passengers.push(playerId);
+      direction = this.getForward();
+    }
+    direction.normalize();
+
+    return {
+      kind: this.config.weaponKind,
+      origin: muzzle,
+      direction,
+      damage: this.config.weaponDamage,
+      range: this.config.weaponRange,
+      explosionRadius: this.config.explosionRadius,
+      owner: this,
+    };
+  }
+
+  // ===== 模块化伤害（阶段 7 P0） =====
+
+  /** 根据命中点相对车体方位判定受击面 */
+  private hitDirectionFrom(hitPointWorld: THREE.Vector3): VehicleHitDirection {
+    const toHit = hitPointWorld.clone().sub(this.mesh.position);
+    toHit.y = 0;
+    const forward = this.getForward();
+    forward.y = 0;
+    if (toHit.lengthSq() < 0.001 || forward.lengthSq() < 0.001) return 'front';
+    toHit.normalize();
+    forward.normalize();
+    const dot = toHit.dot(forward);
+    if (dot > 0.5) return 'front';
+    if (dot < -0.5) return 'rear';
+    return 'side';
+  }
+
+  private resolvePart(hitPointWorld: THREE.Vector3 | undefined, direction: VehicleHitDirection): VehicleDamagePart {
+    if (this.config.weaponMount && hitPointWorld) {
+      // 高命中点 → 炮塔
+      const localY = hitPointWorld.y - this.mesh.position.y;
+      if (localY > this.config.dimensions.height * 0.65) return VehicleDamagePart.TURRET;
+    }
+    if (direction === 'front') return VehicleDamagePart.ENGINE;
+    if (direction === 'side') return VehicleDamagePart.TRACKS;
+    return VehicleDamagePart.HULL;
+  }
+
+  /** 部位失效效果：引擎减速、履带转向失灵、炮塔禁用武器 */
+  private applyPartLoss(part: VehicleDamagePart): void {
+    if (part === VehicleDamagePart.ENGINE) {
+      this.currentMaxSpeed = this.config.maxSpeed * 0.4;
+    } else if (part === VehicleDamagePart.TRACKS) {
+      this.currentTurnSpeed = this.config.turnSpeed * 0.25;
+    } else if (part === VehicleDamagePart.TURRET) {
+      this.weaponDisabled = true;
+    }
+  }
+
+  /**
+   * 受击：装甲修正（正面 0.8 / 侧面 1.25 / 后部 1.6）× 基础装甲；
+   * 伤害分配至部位；返回命中详情供 HUD/击杀反馈。
+   */
+  takeDamage(amount: number, hitPointWorld?: THREE.Vector3, nowMs?: number): VehicleHitResult {
+    if (this.destroyed) {
+      return { damage: 0, part: VehicleDamagePart.HULL, direction: 'front', killed: false };
+    }
+    if (nowMs !== undefined) this.lastDamageTime = nowMs;
+
+    const direction = hitPointWorld ? this.hitDirectionFrom(hitPointWorld) : 'front';
+    const armorMod = direction === 'rear' ? 1.6 : direction === 'side' ? 1.25 : 0.8;
+    const actual = Math.max(1, amount * (1 - this.config.armor) * armorMod);
+
+    const part = this.resolvePart(hitPointWorld, direction);
+    const partState = this.partStates[part];
+    if (!partState.destroyed) {
+      partState.health -= actual;
+      if (partState.health <= 0) {
+        partState.destroyed = true;
+        this.applyPartLoss(part);
+      }
     }
 
+    this.health -= actual;
+    if (this.health <= 0) {
+      this.health = 0;
+      this.destroy();
+      return { damage: actual, part, direction, killed: true };
+    }
+    return { damage: actual, part, direction, killed: false };
+  }
+
+  getPartStates(): Record<VehicleDamagePart, VehiclePartState> {
+    return this.partStates;
+  }
+
+  // ===== 座位系统（阶段 7 P0） =====
+
+  getSeats(): VehicleSeatInfo[] {
+    return this.seats.map((occupant, index) => ({ index, label: this.seatLabels[index] ?? `座位${index}`, occupant }));
+  }
+
+  getSeatIndexOf(playerId: string): number {
+    return this.seats.indexOf(playerId);
+  }
+
+  getSeatLabel(playerId: string): string {
+    const index = this.getSeatIndexOf(playerId);
+    return index >= 0 ? this.seatLabels[index] ?? `座位${index}` : '';
+  }
+
+  /** 上车：优先司机位，否则乘客位；满员返回 null */
+  enterVehicle(playerId: string): 'driver' | 'passenger' | null {
+    if (this.destroyed) return null;
+    const existing = this.getSeatIndexOf(playerId);
+    if (existing >= 0) return existing === 0 ? 'driver' : 'passenger';
+
+    const driverIndex = this.seats.indexOf(null);
+    if (driverIndex < 0) return null;
+    this.seats[driverIndex] = playerId;
+    this.isOccupied = true;
+    return driverIndex === 0 ? 'driver' : 'passenger';
+  }
+
+  /** 座位切换：司机 → 空乘客位；乘客 → 司机位（司机位被占则互换） */
+  switchSeat(playerId: string): boolean {
+    if (this.destroyed) return false;
+    const current = this.getSeatIndexOf(playerId);
+    if (current < 0) return false;
+    if (current === 0) {
+      // 司机 → 找第一个空乘客位
+      for (let i = 1; i < this.seats.length; i++) {
+        if (this.seats[i] === null) {
+          this.seats[i] = playerId;
+          this.seats[0] = null;
+          return true;
+        }
+      }
+      return false;
+    }
+    // 乘客 → 司机：司机位空则直接坐，被占则互换
+    if (this.seats[0] === null) {
+      this.seats[0] = playerId;
+      this.seats[current] = null;
+    } else {
+      const driver = this.seats[0]!;
+      this.seats[0] = playerId;
+      this.seats[current] = driver;
+    }
     return true;
   }
 
   exitVehicle(playerId: string): void {
-    if (this.driver === playerId) {
-      this.driver = null;
-      this.isOccupied = false;
-    } else {
-      this.passengers = this.passengers.filter(p => p !== playerId);
+    const index = this.getSeatIndexOf(playerId);
+    if (index >= 0) this.seats[index] = null;
+    this.isOccupied = this.seats.some((s) => s !== null);
+  }
+
+  getOccupants(): string[] {
+    return this.seats.filter((s): s is string => s !== null);
+  }
+
+  /** 载具被摧毁：禁用物理、隐藏、清空乘员（乘员逃生由接入层处理） */
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (this.body) {
+      this.body.setEnabled(false);
     }
+    this.mesh.visible = false;
+    this.seats = this.seats.map(() => null);
+    this.isOccupied = false;
+  }
+
+  /** 重生：复位血量/部位/弹药/位置 */
+  respawn(): void {
+    this.destroyed = false;
+    this.health = this.config.health;
+    this.ammo = this.config.ammo;
+    this.currentMaxSpeed = this.config.maxSpeed;
+    this.currentTurnSpeed = this.config.turnSpeed;
+    this.weaponDisabled = false;
+    for (const part of Object.values(VehicleDamagePart)) {
+      this.partStates[part] = this.createPart(PART_HEALTH_FACTORS[part]);
+    }
+    this.mesh.position.copy(this.spawnPosition);
+    this.mesh.rotation.set(0, this.spawnRotationY, 0);
+    this.mesh.visible = true;
+    if (this.body) {
+      this.body.setEnabled(true);
+      this.body.setTranslation(
+        new RAPIER.Vector3(this.spawnPosition.x, this.spawnPosition.y, this.spawnPosition.z),
+        true,
+      );
+      this.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
+      this.body.setLinvel(new RAPIER.Vector3(0, 0, 0), true);
+      this.body.setAngvel(new RAPIER.Vector3(0, 0, 0), true);
+    }
+    this.turretYaw = 0;
+    this.turretTargetYaw = 0;
   }
 
   getHealthPercentage(): number {
@@ -286,7 +665,7 @@ export class Vehicle {
       if (child instanceof THREE.Mesh) {
         child.geometry.dispose();
         if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.dispose());
+          child.material.forEach((m) => m.dispose());
         } else {
           child.material.dispose();
         }
@@ -295,10 +674,20 @@ export class Vehicle {
   }
 }
 
+export interface VehicleRespawnEntry {
+  vehicle: Vehicle;
+  /** 剩余重生秒数 */
+  timer: number;
+}
+
 export class VehicleSystem {
   scene: THREE.Scene;
   vehicles: Vehicle[] = [];
   world: RAPIER.World;
+  /** 摧毁后重生队列（阶段 7 P0） */
+  private respawnQueue: VehicleRespawnEntry[] = [];
+  /** 重生延迟秒数 */
+  respawnDelaySeconds = 15;
 
   constructor(scene: THREE.Scene, world: RAPIER.World) {
     this.scene = scene;
@@ -312,10 +701,32 @@ export class VehicleSystem {
     return vehicle;
   }
 
-  update(deltaTime: number): void {
+  update(deltaTime: number, nowMs: number): void {
     for (const vehicle of this.vehicles) {
-      vehicle.update(deltaTime);
+      vehicle.update(deltaTime, nowMs);
     }
+    this.updateRespawns(deltaTime);
+  }
+
+  private updateRespawns(deltaTime: number): void {
+    for (let i = this.respawnQueue.length - 1; i >= 0; i--) {
+      const entry = this.respawnQueue[i];
+      entry.timer -= deltaTime;
+      if (entry.timer <= 0) {
+        entry.vehicle.respawn();
+        this.respawnQueue.splice(i, 1);
+      }
+    }
+  }
+
+  /** 载具被摧毁后登记重生 */
+  scheduleRespawn(vehicle: Vehicle): void {
+    if (this.respawnQueue.some((e) => e.vehicle === vehicle)) return;
+    this.respawnQueue.push({ vehicle, timer: this.respawnDelaySeconds });
+  }
+
+  getRespawnQueue(): readonly VehicleRespawnEntry[] {
+    return this.respawnQueue;
   }
 
   getVehicles(): Vehicle[] {
@@ -324,11 +735,16 @@ export class VehicleSystem {
 
   getVehicleById(playerId: string): Vehicle | null {
     for (const vehicle of this.vehicles) {
-      if (vehicle.driver === playerId || vehicle.passengers.includes(playerId)) {
+      if (vehicle.getSeatIndexOf(playerId) >= 0) {
         return vehicle;
       }
     }
     return null;
+  }
+
+  /** 车辆是否可被命中（未摧毁） */
+  isHittable(vehicle: Vehicle): boolean {
+    return !vehicle.destroyed;
   }
 
   removeVehicle(vehicle: Vehicle): void {
@@ -344,5 +760,6 @@ export class VehicleSystem {
       vehicle.dispose();
     }
     this.vehicles = [];
+    this.respawnQueue = [];
   }
 }

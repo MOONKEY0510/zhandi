@@ -16,6 +16,7 @@ export type ReloadCallback = () => void;
 export type GrenadeCallback = () => void;
 export type EquipmentSwitchCallback = (slot: number) => void;
 export type VehicleToggleCallback = () => void;
+export type SeatSwitchCallback = () => void;
 export type ScoreboardCallback = (visible: boolean) => void;
 export type EscapeCallback = () => void;
 export type WeatherToggleCallback = () => void;
@@ -31,6 +32,7 @@ export class InputManager {
   private grenadeCallbacks: GrenadeCallback[] = [];
   private equipmentSwitchCallbacks: EquipmentSwitchCallback[] = [];
   private vehicleToggleCallbacks: VehicleToggleCallback[] = [];
+  private seatSwitchCallbacks: SeatSwitchCallback[] = [];
   private scoreboardCallbacks: ScoreboardCallback[] = [];
   private escapeCallbacks: EscapeCallback[] = [];
   private weatherToggleCallbacks: WeatherToggleCallback[] = [];
@@ -63,6 +65,10 @@ export class InputManager {
     // 载具 E
     if (e.code === 'KeyE' && !this.keys.has('KeyE')) {
       this.vehicleToggleCallbacks.forEach(cb => cb());
+    }
+    // 载具座位切换 F
+    if (e.code === 'KeyF' && !this.keys.has('KeyF')) {
+      this.seatSwitchCallbacks.forEach(cb => cb());
     }
     // 天气切换 T
     if (e.code === 'KeyT' && !this.keys.has('KeyT')) {
@@ -167,6 +173,7 @@ export class InputManager {
   onGrenade(cb: GrenadeCallback): void { this.grenadeCallbacks.push(cb); }
   onEquipmentSwitch(cb: EquipmentSwitchCallback): void { this.equipmentSwitchCallbacks.push(cb); }
   onVehicleToggle(cb: VehicleToggleCallback): void { this.vehicleToggleCallbacks.push(cb); }
+  onSeatSwitch(cb: SeatSwitchCallback): void { this.seatSwitchCallbacks.push(cb); }
   onScoreboard(cb: ScoreboardCallback): void { this.scoreboardCallbacks.push(cb); }
   onEscape(cb: EscapeCallback): void { this.escapeCallbacks.push(cb); }
   onWeatherToggle(cb: WeatherToggleCallback): void { this.weatherToggleCallbacks.push(cb); }

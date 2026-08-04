@@ -1,5 +1,12 @@
 import type { PerformanceMonitor, PerformanceSnapshot } from './PerformanceMonitor';
 
+/** 阶段 6 预算统计：音频 voice 与特效池的实时占用 */
+export interface PerformanceExtras {
+  voicesReal: number;
+  voicesVirtual: number;
+  vfxActive: number;
+}
+
 export class PerformancePanel {
   private readonly container: HTMLDivElement;
   private readonly values: HTMLPreElement;
@@ -58,10 +65,10 @@ export class PerformancePanel {
     this.container.style.display = visible ? 'block' : 'none';
   }
 
-  update(snapshot: PerformanceSnapshot, benchmarkEnabled: boolean): void {
+  update(snapshot: PerformanceSnapshot, benchmarkEnabled: boolean, extras?: PerformanceExtras): void {
     if (!this.visible) return;
 
-    this.values.textContent = [
+    const lines = [
       `MODE   ${benchmarkEnabled ? 'BENCHMARK' : 'GAME'}`,
       `FPS    ${snapshot.fps.toFixed(1)}`,
       `FRAME  ${snapshot.frameTimeMs.toFixed(2)} ms`,
@@ -71,7 +78,14 @@ export class PerformancePanel {
       `TRIS   ${snapshot.triangles.toLocaleString()}`,
       `TEX/G  ${snapshot.textures}/${snapshot.geometries}`,
       `ENTITY ${snapshot.entities}`,
-    ].join('\n');
+    ];
+    if (extras) {
+      lines.push(
+        `VOICE  ${extras.voicesReal} real / ${extras.voicesVirtual} virt`,
+        `VFX    ${extras.vfxActive} active`,
+      );
+    }
+    this.values.textContent = lines.join('\n');
   }
 
   dispose(): void {
