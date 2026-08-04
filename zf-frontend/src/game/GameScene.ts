@@ -23,10 +23,17 @@ import type { SoldierClassDefinition } from '../player/SoldierClass';
 import { AISystem, AIBot } from '../ai/AIBot';
 import { AIStats } from '../ai/AIStats';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
+import { AudioVoiceManager } from '../audio/AudioVoiceManager';
+import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
 import { VehicleSystem, VehicleType } from '../vehicle/VehicleSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
+import { VISUAL_PROFILES, resolveVisualProfileId, colorTemperatureToRGB } from '../environment/VisualProfile';
+import { WeatherMaterialLink } from '../environment/WeatherMaterialLink';
+import { VfxPool, VfxType } from '../effects/VfxPool';
+import { ExplosionImpactSystem } from '../effects/ExplosionImpact';
+import { DynamicResolution } from '../performance/DynamicResolution';
 import type { GameEvents } from './GameEvents';
 import { GameMode, GameModeType } from './GameMode';
 import { ConquestPresenter } from './ConquestPresenter';
@@ -109,6 +116,18 @@ export class GameScene {
   private weatherSystem!: WeatherSystem;
   private ambientLight!: THREE.AmbientLight;
   private dirLight!: THREE.DirectionalLight;
+
+  // 阶段 6：渲染/特效/音频接线
+  private readonly weatherMaterialLink = new WeatherMaterialLink();
+  private readonly dynamicResolution = new DynamicResolution();
+  private readonly vfxPool = new VfxPool();
+  private readonly explosionImpact = new ExplosionImpactSystem();
+  private readonly audioVoiceManager = new AudioVoiceManager();
+  private graphicsLevel: GameSettings['graphics'] = loadGameSettings().graphics;
+  private basePixelRatio = Math.min(window.devicePixelRatio, 2);
+  private appliedPixelRatio = -1;
+  private lastFrameTime = 0;
+  private dayNightEnabled = true;
 
   // 游戏模式 & 成就
   private gameMode!: GameMode;
@@ -193,9 +212,13 @@ export class GameScene {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.basePixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // 阶段 6：ACES 胶片色调映射 + sRGB 输出 + 曝光基线
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = VISUAL_PROFILES.day_clear.exposure;
     container.appendChild(this.renderer.domElement);
 
     this.simulationClock = new FixedStepClock({
@@ -402,6 +425,10 @@ export class GameScene {
     this.weatherSystem.enableAutoWeather(
       this.config.benchmark.enabled ? this.config.benchmark.autoWeather : true,
     );
+    this.dayNightEnabled = this.config.benchmark.enabled ? this.config.benchmark.dayNightCycle : true;
+    this.weatherSystem.onWeatherChange = (type) => this.applyWeatherLink(type);
+    this.applyWeatherLink(this.weatherSystem.getCurrentWeather());
+    this.applyVisualProfile();
 
     // 游戏模式 (TDM - 用于击杀统计)
     this.gameMode = new GameMode(GameModeType.TDM);
@@ -530,14 +557,12 @@ export class GameScene {
     const savedSettings = saveGameSettings(settings);
     this.audioSystem?.setVolume(savedSettings.volume / 100);
     this.player?.applySettings(savedSettings);
-    // 灵敏度和画质可以在此应用
-    if (savedSettings.graphics === 'low') {
-      this.renderer.setPixelRatio(1);
-      this.renderer.shadowMap.enabled = false;
-    } else if (savedSettings.graphics === 'high') {
-      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      this.renderer.shadowMap.enabled = true;
-    }
+    // 画质档位：低画质关闭阴影并固定 1x；中/高开启阴影并启用动态分辨率
+    this.graphicsLevel = savedSettings.graphics;
+    this.basePixelRatio = savedSettings.graphics === 'low' ? 1 : Math.min(window.devicePixelRatio, 2);
+    this.renderer.shadowMap.enabled = savedSettings.graphics !== 'low';
+    this.dynamicResolution.reset();
+    this.appliedPixelRatio = -1; // 下一帧强制应用新的像素比
   }
 
   private setupDeathOverlay(): void {
@@ -794,6 +819,18 @@ export class GameScene {
 
   // ====== 爆炸特效 ======
   private spawnExplosionEffect(position: THREE.Vector3): void {
+    // 统一特效池预算门控：预算满时跳过本次表现，防止大规模爆炸拖垮帧率
+    const handle = this.vfxPool.spawn(
+      {
+        type: VfxType.EXPLOSION,
+        position: { x: position.x, y: position.y, z: position.z },
+        importance: 'high',
+        durationMs: 800,
+      },
+      this.simulationTimeMs,
+    );
+    if (!handle) return;
+
     // 火球
     const fireGeo = new THREE.SphereGeometry(0.5, 8, 8);
     const fireMat = new THREE.MeshBasicMaterial({
@@ -875,6 +912,18 @@ export class GameScene {
 
   // ====== 烟雾效果 ======
   private spawnSmokeEffect(position: THREE.Vector3, radius: number): void {
+    // 烟雾受统一特效池门控（SMOKE 单类型预算 64）
+    const handle = this.vfxPool.spawn(
+      {
+        type: VfxType.SMOKE,
+        position: { x: position.x, y: position.y, z: position.z },
+        importance: 'medium',
+        durationMs: 5000,
+      },
+      this.simulationTimeMs,
+    );
+    if (!handle) return;
+
     const count = 40;
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
@@ -1069,7 +1118,7 @@ export class GameScene {
     }
 
     this.spawnTracer(origin, endPoint);
-    this.audioSystem.play(SoundType.GUNSHOT, origin);
+    this.playGunshot(origin);
   }
 
   private processHit(
@@ -1204,16 +1253,37 @@ export class GameScene {
         }
       }
 
-      // 爆炸音效 + 屏幕震动 + 特效
+      // 爆炸音效 + 冲击反馈（四通道预算）+ 特效
       if (equip.config.type === EquipmentType.FRAG_GRENADE && elapsed < equip.config.fuseTime + 0.1) {
         this.audioSystem.play(SoundType.EXPLOSION, equip.position);
         this.spawnExplosionEffect(equip.position.clone());
-        // 爆炸屏幕震动
         const playerPos = this.player?.getPosition();
         if (playerPos) {
-          const dist = equip.position.distanceTo(this.tmpVec1.set(playerPos.x, playerPos.y, playerPos.z));
-          if (dist < 15) {
-            this.player?.addShake(0.15 * (1 - dist / 15), 4);
+          const result = this.explosionImpact.trigger(
+            { x: equip.position.x, y: equip.position.y, z: equip.position.z },
+            { x: playerPos.x, y: playerPos.y, z: playerPos.z },
+            currentTime,
+          );
+          // 相机震动（受每秒预算限制）
+          if (result.shakeAmplitude > 0) {
+            this.player?.addShake(result.shakeAmplitude * 0.15, 4);
+          }
+          // 耳鸣：近距离爆炸高频鸣响
+          if (result.tinnitus) {
+            this.audioSystem.play(SoundType.TINNITUS, undefined, result.tinnitusIntensity * 0.5);
+          }
+          // 物理冲击：对近距离 Bot 施加击退/受击反馈（不扣血）
+          if (result.impulse > 0) {
+            for (const bot of this.aiSystem.bots) {
+              if (bot.state === 'dead') continue;
+              if (bot.mesh.position.distanceTo(equip.position) <= 12) {
+                bot.takeDamage(0, equip.position, currentTime);
+              }
+            }
+          }
+          // 扬尘
+          if (result.dust) {
+            this.spawnDustEffect(equip.position.clone());
           }
         }
       }
@@ -1423,8 +1493,8 @@ export class GameScene {
       // AI 射击弹道轨迹（红色）
       this.spawnAIFireTracer(origin, direction, bot);
 
-      // AI 枪声
-      this.audioSystem.play(SoundType.GUNSHOT, origin);
+      // AI 枪声（分层 + voice 预算）
+      this.playGunshot(origin);
 
       // 射线检测：是否命中玩家
       const playerPos = this.player?.getPosition();
@@ -1567,6 +1637,111 @@ export class GameScene {
     this.scoreboard.updatePlayers(players);
   }
 
+  // ====== 阶段 6 接线：枪声分层 / 视觉基线 / 材质联动 / 特效池 / 冲击反馈 / 动态分辨率 ======
+  private playGunshot(origin: THREE.Vector3): void {
+    const listener = this.player?.getPosition();
+    const distance = listener ? origin.distanceTo(this.tmpVec1.set(listener.x, listener.y, listener.z)) : 0;
+    const now = this.simulationTimeMs;
+    const listenerPos = listener ? { x: listener.x, y: listener.y, z: listener.z } : { x: 0, y: 0, z: 0 };
+    const originPos = { x: origin.x, y: origin.y, z: origin.z };
+
+    for (const layer of resolveAudibleLayers(distance)) {
+      const gain = computeLayerGain(layer, distance);
+      if (gain <= 0) continue;
+      const id = `gun_${layer.name}_${now}_${Math.random().toString(36).slice(2, 8)}`;
+      const voice = this.audioVoiceManager.request(
+        {
+          id,
+          priority: layer.priority,
+          maxDistance: layer.maxDistance,
+          durationMs: 500,
+          position: originPos,
+        },
+        listenerPos,
+        now,
+      );
+      // 预算拒绝或虚拟播放时不创建真实音频节点
+      if (!voice || voice.virtual) continue;
+      this.audioSystem.play(SoundType.GUNSHOT, origin, gain);
+    }
+  }
+
+  private applyVisualProfile(): void {
+    const weather = this.weatherSystem?.getCurrentWeather() ?? WeatherType.CLEAR;
+    const timeOfDay = this.weatherSystem?.getTimeOfDay() ?? 0.3;
+    const profile = VISUAL_PROFILES[resolveVisualProfileId(weather, timeOfDay)];
+
+    this.renderer.toneMappingExposure = profile.exposure;
+    const sun = colorTemperatureToRGB(profile.directionalColorTemperatureK);
+    this.dirLight.color.setRGB(sun.r, sun.g, sun.b);
+    this.ambientLight.color.set(profile.ambientColor);
+    this.dirLight.shadow.intensity = profile.shadowStrength;
+    // 昼夜循环开启时太阳角度由 WeatherSystem 驱动；关闭时按基线固定
+    if (!this.dayNightEnabled) {
+      this.dirLight.position.set(
+        profile.sunDirection.x * 100,
+        profile.sunDirection.y * 100,
+        profile.sunDirection.z * 100,
+      );
+    }
+  }
+
+  private applyWeatherLink(weather: WeatherType): void {
+    const materials: THREE.Material[] = [];
+    this.scene.traverse((obj) => {
+      const material = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      if (!material) return;
+      if (Array.isArray(material)) materials.push(...material);
+      else materials.push(material);
+    });
+    this.weatherMaterialLink.apply(weather, materials);
+  }
+
+  private updateAudioVoices(): void {
+    const pos = this.player?.getPosition();
+    if (!pos) return;
+    this.audioVoiceManager.update(this.simulationTimeMs, { x: pos.x, y: pos.y, z: pos.z });
+  }
+
+  private updateVfxPool(): void {
+    const pos = this.player?.getPosition();
+    if (!pos) return;
+    this.vfxPool.update(this.simulationTimeMs, { x: pos.x, y: pos.y, z: pos.z });
+  }
+
+  private spawnDustEffect(position: THREE.Vector3): void {
+    const count = 12;
+    const positions = new Float32Array(count * 3);
+    const velocities: THREE.Vector3[] = [];
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = position.x;
+      positions[i * 3 + 1] = position.y + 0.2;
+      positions[i * 3 + 2] = position.z;
+      const theta = gameplayRandom() * Math.PI * 2;
+      const speed = 1.5 + gameplayRandom() * 3;
+      velocities.push(new THREE.Vector3(Math.cos(theta) * speed, gameplayRandom() * 1.5, Math.sin(theta) * speed));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ color: 0x9a8f80, size: 0.18, transparent: true, opacity: 0.7 });
+    const points = new THREE.Points(geo, mat);
+    points.userData = { velocities, life: 0, maxLife: 0.7 };
+    this.scene.add(points);
+    this.sparkEffects.push(points);
+  }
+
+  private updateDynamicResolution(time: number): void {
+    if (this.graphicsLevel === 'low') return; // 低画质固定 1x
+    const frameTime = this.lastFrameTime === 0 ? 16.7 : time - this.lastFrameTime;
+    this.lastFrameTime = time;
+    const scale = this.dynamicResolution.update(frameTime, time);
+    const targetRatio = this.basePixelRatio * scale;
+    if (Math.abs(targetRatio - this.appliedPixelRatio) > 0.001) {
+      this.renderer.setPixelRatio(targetRatio);
+      this.appliedPixelRatio = targetRatio;
+    }
+  }
+
   // ====== 主循环 ======
   private animate = (time: number): void => {
     if (this.stateMachine.is(GameState.DISPOSED)) return;
@@ -1589,6 +1764,7 @@ export class GameScene {
     if (this.stateMachine.is(GameState.PLAYING, GameState.PAUSED, GameState.ROUND_END)) {
       this.updatePerformanceMetrics(time);
     }
+    this.updateDynamicResolution(time);
   };
 
   private simulateFixedStep(dt: number, time: number): void {
@@ -1630,6 +1806,7 @@ export class GameScene {
     this.updateExplosionEffects(dt);
     this.updateDamageNumbers(dt);
     this.updateSparks(dt);
+    this.updateVfxPool();
 
     // 战术装备
     this.equipmentSystem.update(dt, time);
@@ -1666,6 +1843,8 @@ export class GameScene {
         this.weatherSystem.update(dt, time, this.tmpVec1.set(pos.x, pos.y, pos.z));
       }
     }
+    // 视觉基线：按天气与时刻切换曝光/色温/阴影（每帧跟随天气与昼夜）
+    this.applyVisualProfile();
 
     // 音频监听器
     if (this.player) {
@@ -1676,6 +1855,8 @@ export class GameScene {
         this.audioSystem.updateListener(pos, forward, this.tmpVec3.set(0, 1, 0));
       }
     }
+    // 音频 voice 预算：真实/虚拟转换与过期清理
+    this.updateAudioVoices();
 
     // 网络
     if (this.networkManager && this.player && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
@@ -1815,6 +1996,9 @@ export class GameScene {
     this.deploymentMenu?.dispose();
     this.audioSystem?.dispose();
     this.weatherSystem?.dispose();
+    this.vfxPool.dispose();
+    this.audioVoiceManager.dispose();
+    this.weatherMaterialLink.clear();
     this.vehicleSystem?.dispose();
     this.equipmentSystem?.dispose();
     this.mapManager?.dispose();

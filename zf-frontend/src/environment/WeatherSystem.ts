@@ -83,6 +83,8 @@ export class WeatherSystem {
   private ambientLight: THREE.AmbientLight;
   private directionalLight: THREE.DirectionalLight;
   private currentWeather: WeatherType = WeatherType.CLEAR;
+  /** 天气切换回调（接入层用于联动视觉基线/材质） */
+  onWeatherChange?: (type: WeatherType) => void;
   private particles: THREE.Points | null = null;
   private particleVelocities: Float32Array = new Float32Array(0);
   private config: WeatherConfig = WEATHER_CONFIGS[WeatherType.CLEAR];
@@ -118,6 +120,7 @@ export class WeatherSystem {
   private applyWeather(type: WeatherType): void {
     this.currentWeather = type;
     this.config = WEATHER_CONFIGS[type];
+    this.onWeatherChange?.(type);
 
     // 清除旧粒子
     if (this.particles) {

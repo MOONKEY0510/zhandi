@@ -3,6 +3,7 @@ export enum SoundType {
   RELOAD = 'reload',
   FOOTSTEP = 'footstep',
   EXPLOSION = 'explosion',
+  TINNITUS = 'tinnitus',
   HIT = 'hit',
   DEATH = 'death',
   AMBIENT = 'ambient',
@@ -56,6 +57,15 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 150,
     rolloffFactor: 1,
+  },
+  [SoundType.TINNITUS]: {
+    type: SoundType.TINNITUS,
+    url: '/sounds/tinnitus.mp3',
+    volume: 0.3,
+    loop: false,
+    spatial: false,
+    maxDistance: 0,
+    rolloffFactor: 0,
   },
   [SoundType.HIT]: {
     type: SoundType.HIT,
@@ -141,6 +151,8 @@ export class AudioSystem {
     this.sounds.set(SoundType.FOOTSTEP, this.createNoiseBurst(0.05, 150, 0.3));
     // 爆炸：长噪声 + 低频
     this.sounds.set(SoundType.EXPLOSION, this.createNoiseBurst(0.8, 200, 1.0));
+    // 耳鸣：近距爆炸后的高频下降鸣响
+    this.sounds.set(SoundType.TINNITUS, this.createSweepTone(1.0, 3600, 2400, 0.3));
     // 命中：中频短音
     this.sounds.set(SoundType.HIT, this.createTone(0.08, 600, 0.5));
     // 死亡：下降音调
@@ -240,7 +252,7 @@ export class AudioSystem {
     return buffer;
   }
 
-  play(type: SoundType, position?: { x: number; y: number; z: number }): string | null {
+  play(type: SoundType, position?: { x: number; y: number; z: number }, volume?: number): string | null {
     if (!this.audioContext || this.isMuted) return null;
 
     const buffer = this.sounds.get(type);
@@ -261,7 +273,7 @@ export class AudioSystem {
     const volumeRand = (type === SoundType.GUNSHOT || type === SoundType.HIT)
       ? 0.85 + Math.random() * 0.3
       : 1;
-    gainNode.gain.value = config.volume * this.masterVolume * volumeRand;
+    gainNode.gain.value = (volume ?? config.volume) * this.masterVolume * volumeRand;
 
     if (config.spatial && position) {
       const panner = this.createPanner(config, position);
