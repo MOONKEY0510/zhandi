@@ -15,6 +15,7 @@ import {
   BULLET_DAMAGE,
   RESPAWN_DELAY_MS,
   ROUND_RESTART_DELAY_MS,
+  HIT_REWIND_WINDOW_MS,
   type NetworkMessage,
   type PlayerInput,
   type JoinAck,
@@ -32,6 +33,7 @@ import { VehicleSim } from './VehicleSim.ts';
 import { ProjectileSim, type ProjectileTarget, type ProjectileObstacle } from './ProjectileSim.ts';
 import { ConquestSim, type ConquestPlayerRef } from './ConquestSim.ts';
 import { DestructibleSim } from './DestructibleSim.ts';
+import { PositionHistory } from './PositionHistory.ts';
 
 export interface ServerAppOptions {
   port?: number;
@@ -83,6 +85,8 @@ export class ServerApp {
   private readonly options: Required<Pick<ServerAppOptions, 'defaultRoomId'>> & ServerAppOptions;
   /** 监控：累计速度修正次数（异常移动检测） */
   private totalCorrections = 0;
+  /** 有限历史回溯：玩家位置历史（弹道裁决按发射时刻采样，阶段 8 第十九批） */
+  private readonly positionHistories = new Map<string, PositionHistory>();
   /** tick 循环定时器（stop 时清除，优雅关闭） */
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -358,7 +362,18 @@ export class ServerApp {
       maxRange: result.maxRange,
       lifeMs: result.lifeMs,
       label: VEHICLE_WEAPON_LABELS[result.weaponKind],
+      spawnTimeMs: this.clock.nowMs(),
     });
+  }
+
+  /** 记录玩家位置到有限历史回溯缓冲（输入应用 / 无输入 / 重生后调用） */
+  private recordPosition(playerId: string, s: { x: number; y: number; z: number; alive: boolean }): void {
+    let hist = this.positionHistories.get(playerId);
+    if (!hist) {
+      hist = new PositionHistory();
+      this.positionHistories.set(playerId, hist);
+    }
+    hist.record(this.clock.nowMs(), s.x, s.y, s.z, s.alive);
   }
 
   /** 每 tick：把最新输入应用到玩家模拟，推进弹道并裁决命中 */
@@ -384,7 +399,7 @@ export class ServerApp {
         const result = conn.sim.step(input, deltaSeconds, this.clock.nowMs());
         if (result.corrected) this.totalCorrections += 1;
         if (result.fired) {
-          // 服务端裁决射速通过 → 生成弹丸（起点 = 眼睛高度，方向 = 朝向）
+          // 服务端裁决射速通过 → 生成弹丸（起点 = 眼睛高度，方向 = 朝向；发射时刻供有限历史回溯采样）
           const s = conn.sim.state;
           this.projectiles.spawn({
             ownerId: conn.playerId!,
@@ -394,13 +409,16 @@ export class ServerApp {
             z: s.z,
             yaw: s.yaw,
             pitch: s.pitch,
+            spawnTimeMs: this.clock.nowMs(),
           });
         }
+        this.recordPosition(conn.playerId!, conn.sim.state);
         applied = true;
       }
       if (!applied) {
         // 无输入：惯性停止（速度由钳制模型自然归零）
         conn.sim.step({ moveForward: false, moveBackward: false, moveLeft: false, moveRight: false, sprint: false, fire: false, aimYaw: conn.sim.state.yaw, aimPitch: conn.sim.state.pitch }, deltaSeconds, this.clock.nowMs());
+        this.recordPosition(conn.playerId!, conn.sim.state);
       }
     }
 
@@ -415,6 +433,8 @@ export class ServerApp {
         const spawn = SPAWN[s.team];
         conn.sim.respawn(spawn.x, spawn.z);
         conn.vehicleDrive = null;
+        // 重生瞬移：覆盖位置历史（同一时刻替换），弹道回溯立即反映新位置
+        this.recordPosition(conn.playerId!, conn.sim.state);
       }
     }
 
@@ -423,7 +443,17 @@ export class ServerApp {
     for (const conn of this.connections.values()) {
       if (!conn.sim) continue;
       const s = conn.sim.state;
-      targets.push({ id: s.id, team: s.team, x: s.x, y: s.y, z: s.z, alive: s.alive });
+      // 有限历史回溯：玩家目标挂 sampleAt（按发射时刻采样），载具无历史 → 当前帧位置
+      const hist = this.positionHistories.get(s.id);
+      targets.push({
+        id: s.id,
+        team: s.team,
+        x: s.x,
+        y: s.y,
+        z: s.z,
+        alive: s.alive,
+        sampleAt: hist ? (tm) => hist.sampleAt(tm, HIT_REWIND_WINDOW_MS) : undefined,
+      });
     }
     // 载具作为弹道目标：命中半径按车型（大型目标更易命中），摧毁 → 司机被清空（vehicle_state 广播驱动客户端被动退出）
     for (const room of this.roomManager.listRooms()) {

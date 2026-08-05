@@ -69,6 +69,16 @@ const IDLE_INPUT = {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询直到谓词成立（带超时；真实定时器端到端用例的自适应等待） */
+async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs = 50): Promise<boolean> {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(intervalMs);
+  }
+  return predicate();
+}
+
 describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
   let server: ServerApp;
   let url: string;
@@ -210,7 +220,11 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
       a.sendInput({ ...IDLE_INPUT, moveForward: true });
       await sleep(16);
     }
-    expect(prediction.pendingInputs.length).toBeGreaterThan(0); // 预测已挂载并推进
+    // 预测已挂载并推进：发送期间/之后应出现过未确认缓冲。
+    // 原断言依赖「发送完成瞬间仍有输入在途」的边缘时序（16ms 发送 vs 30Hz tick 应用），
+    // 高负载下发送间隔被拉长可能瞬间全 ack → flaky；改为轮询宽限，判别力不变（未挂载则恒为 0）。
+    const everBuffered = await waitFor(() => prediction.pendingInputs.length > 0, 3000, 10);
+    expect(everBuffered).toBe(true);
 
     // 等服务端应用全部输入 → 快照携带 lastAppliedSeq → 客户端 reconcile 按 ackSeq 清理缓冲
     await sleep(800);
@@ -268,10 +282,10 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
   it('载具武器闭环：B 坦克主炮摧毁 A 的吉普 → A 被清出司机位（vehicle_state 权威广播）', async () => {
     const a = makeClient('vkill-a');
     const b = makeClient('vkill-b');
-    const v1States: { destroyed: boolean; driverId: string | null }[] = [];
+    const v1States: { destroyed: boolean; driverId: string | null; health: number }[] = [];
     a.onVehicleState = (state) => {
       const v1 = state.vehicles.find((v) => v.id === 'v1');
-      if (v1) v1States.push({ destroyed: v1.destroyed, driverId: v1.driverId });
+      if (v1) v1States.push({ destroyed: v1.destroyed, driverId: v1.driverId, health: v1.health });
     };
 
     await a.connect();
@@ -288,13 +302,16 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
     // 从 v2(16,16) 朝 v1(-16,-16)：方向 yaw = atan2(-32, 32) = -π/4
     const yaw = Math.atan2(-32, 32);
     b.sendVehicleFire('v2', yaw, 0, 0); // 第 1 炮：200 - 120 = 80
-    await sleep(2100); // > 坦克主炮冷却 1800ms
+    // 自适应等待：观察到第 1 炮伤害（health 200→80）后，再等满主炮冷却（1800ms）发第 2 炮。
+    // 原固定 2100ms 等待在全量并行高负载下偶发不足，事件驱动 + 冷却余量消除 flaky。
+    const firstHit = await waitFor(() => v1States.some((s) => s.health <= 80), 6000);
+    expect(firstHit).toBe(true); // 第 1 炮必须命中（主炮 120 伤）
+    await sleep(2100); // > 坦克主炮冷却 1800ms（发射时刻起算）
     b.sendVehicleFire('v2', yaw, 0, 0); // 第 2 炮：摧毁
-    await sleep(800);
+    const destroyed = await waitFor(() => v1States.some((s) => s.destroyed), 6000);
+    expect(destroyed).toBe(true); // 吉普被坦克主炮摧毁
 
     const last = v1States[v1States.length - 1];
-    expect(last).toBeDefined();
-    expect(last.destroyed).toBe(true); // 吉普被坦克主炮摧毁
     expect(last.driverId).toBeNull(); // A 被清出司机位（被动下车）
     // 中途应观察到健康状态（第 1 炮后 health 80 → 未摧毁）
     expect(v1States.some((s) => !s.destroyed)).toBe(true);

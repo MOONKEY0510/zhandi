@@ -313,4 +313,67 @@ describe('服务端权威战斗闭环（阶段 8 第十七批：死亡/重生/�
     // bitset 长度与布局一致（稳定 ID 位序）
     expect(statesA[statesA.length - 1]?.bits.length).toBe(DESTRUCTIBLE_SPAWN_DEFS.length);
   }, 30000);
+
+  it('有限历史回溯端到端：目标在弹丸飞行中移出命中带，按开火时刻位置裁决命中', async () => {
+    const a = makeClient('ra1');
+    const b = makeClient('rb1');
+    await a.connect();
+    await b.connect();
+    const ackAPromise = waitJoinAck(a);
+    const ackBPromise = waitJoinAck(b);
+    a.joinRoom('rewind');
+    b.joinRoom('rewind');
+    const [ackA, ackB] = await Promise.all([ackAPromise, ackBPromise]);
+    expect(ackA.team).not.toBe(ackB.team); // 平衡分配：不同队
+
+    const shooterIsA = ackA.team === 0;
+    const shooter = shooterIsA ? a : b;
+    const target = shooterIsA ? b : a;
+    const targetId = shooterIsA ? ackB.playerId : ackA.playerId;
+    const targetTeam = shooterIsA ? ackB.team : ackA.team;
+    const shooterTeam = shooterIsA ? ackA.team : ackB.team;
+
+    const sx = spawnOf(shooterTeam).x; // -20
+    const sz = sx;
+    const tx = spawnOf(targetTeam).x; // 20
+    const tz = tx;
+
+    // target 快照跟踪：服务端权威 health（回溯命中的判别量）
+    let tHealth = 100;
+    target.onSnapshot = (players) => {
+      const me = players.get(targetId);
+      if (me) tHealth = me.health;
+    };
+
+    // target 沿 -z 走 2.8s（≈14.6m）到 (20,-14.6) 静止——弹道 (-20,-20)→(20,-14.6)
+    // 与载具重生点 v1(-16,-16)/v2(16,16) 距离 >3m，避免挡弹（沿用 GameState 走位方案）
+    const walkStart = performance.now();
+    while (performance.now() - walkStart < 2800) {
+      target.sendInput({ ...IDLE_INPUT, moveForward: true });
+      await sleep(30);
+    }
+    await sleep(300); // 静止，等服务端权威位置稳定
+
+    // 射手瞄准 target 当前位置（弹道终点 = 开火时刻 target 所在）；target 同时继续沿 -z 移动
+    const nt = { x: tx, z: tz - 2.8 * 5.2 };
+    const ndx = nt.x - sx;
+    const ndz = nt.z - sz;
+    const ndist = Math.hypot(ndx, ndz);
+    // 服务端 forward = (sin(yaw), -cos(yaw))；pitch 下压使弹道在目标躯干高度穿过
+    const yaw = Math.atan2(ndx, -ndz);
+    const pitch = Math.asin((0.5 - 1.6) / ndist);
+
+    // 单发开火 + target 立即持续移动：弹丸飞行 ndist/60 ≈ 0.67s，target 移动 ≈3.5m >> 0.6m 命中半径
+    shooter.sendInput({ ...IDLE_INPUT, fire: true, aimYaw: yaw, aimPitch: pitch });
+    const runStart = performance.now();
+    while (performance.now() - runStart < 1500) {
+      target.sendInput({ ...IDLE_INPUT, moveForward: true });
+      await sleep(30);
+    }
+    await sleep(400); // 等弹道结算 + 快照到达
+
+    // 回溯命中（开火时刻 target 在弹道终点带内）→ 25 伤害 → health 75；
+    // 非回溯（弹丸到达时刻 target 已移出命中带）必 miss → health 100（用例即失败）
+    expect(tHealth).toBeLessThanOrEqual(75);
+  }, 30000);
 });

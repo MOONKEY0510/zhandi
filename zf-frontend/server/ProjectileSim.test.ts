@@ -182,4 +182,50 @@ describe('ProjectileSim（阶段 8 服务端命中裁决）', () => {
     expect(segmentYOverlaps(0.5, 0.5, fence)).toBe(true); // y=0.5 在 0..1.2 内
     expect(segmentYOverlaps(1.5, 1.5, fence)).toBe(false); // y=1.5 高于栅栏顶
   });
+
+  it('有限历史回溯：目标在弹丸飞行中移出命中带，按发射时刻位置裁决命中', () => {
+    const sim = new ProjectileSim();
+    sim.spawn({ ownerId: 'p1', team: 0, x: 0, y: 0, z: 0, yaw: Math.PI / 2, pitch: 0, spawnTimeMs: 1000 });
+    // 当前帧位置 (5,0,3) 横向偏移 3m（> 0.6 命中半径，非回溯必 miss）；
+    // 发射时刻（射手瞄准时刻）回溯位置 (5,0,0) 在弹道上 → 命中
+    const moving: ProjectileTarget = {
+      id: 'e1',
+      team: 1,
+      x: 5,
+      y: 0,
+      z: 3,
+      alive: true,
+      sampleAt: (tm) => (tm === 1000 ? { x: 5, y: 0, z: 0 } : null),
+    };
+    let hits = 0;
+    for (let i = 0; i < 100; i++) hits += sim.step(DT, [moving]).length;
+    expect(hits).toBe(1);
+  });
+
+  it('回溯不可用（无历史 / 超窗返回 null）：回退当前帧位置裁决', () => {
+    const sim = new ProjectileSim();
+    sim.spawn({ ownerId: 'p1', team: 0, x: 0, y: 0, z: 0, yaw: Math.PI / 2, pitch: 0, spawnTimeMs: 1000 });
+    const noHist: ProjectileTarget = { id: 'e1', team: 1, x: 5, y: 0, z: 3, alive: true, sampleAt: () => null };
+    let hits = 0;
+    for (let i = 0; i < 100; i++) hits += sim.step(DT, [noHist]).length;
+    expect(hits).toBe(0); // 当前帧位置带外 → miss
+  });
+
+  it('回溯位置不在命中带内 → 不命中（裁决以发射时刻位置为准）', () => {
+    const sim = new ProjectileSim();
+    sim.spawn({ ownerId: 'p1', team: 0, x: 0, y: 0, z: 0, yaw: Math.PI / 2, pitch: 0, spawnTimeMs: 1000 });
+    // 目标当前帧在弹道上 (5,0,0)，但发射时刻在带外 (5,0,3) → 不命中
+    const rewindMiss: ProjectileTarget = {
+      id: 'e1',
+      team: 1,
+      x: 5,
+      y: 0,
+      z: 0,
+      alive: true,
+      sampleAt: (tm) => (tm === 1000 ? { x: 5, y: 0, z: 3 } : null),
+    };
+    let hits = 0;
+    for (let i = 0; i < 100; i++) hits += sim.step(DT, [rewindMiss]).length;
+    expect(hits).toBe(0);
+  });
 });

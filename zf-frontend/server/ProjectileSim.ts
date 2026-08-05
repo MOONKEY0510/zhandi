@@ -24,6 +24,12 @@ export interface ProjectileTarget {
   alive: boolean;
   /** 命中判定半径 m（默认 BULLET_HIT_RADIUS；载具等大型目标用更大的半径） */
   radius?: number;
+  /**
+   * 有限历史回溯采样（阶段 8 第十九批）：命中判定时按「弹丸发射时刻」回溯目标位置，
+   * 而非当前帧位置——客户端插值缓冲显示的目标位置滞后于服务端权威位置，不回溯则
+   * 高延迟下移动目标必然打空。返回 null（无历史 / 超回溯窗口）时回退当前帧位置。
+   */
+  sampleAt?: (timeMs: number) => { x: number; y: number; z: number } | null;
 }
 
 export interface ServerProjectile {
@@ -42,6 +48,8 @@ export interface ServerProjectile {
   traveled: number;
   maxRange: number;
   lifeMs: number;
+  /** 弹丸发射时刻（ms，服务端时钟；有限历史回溯的采样基准 = 射手瞄准时刻） */
+  spawnTimeMs: number;
 }
 
 export interface ProjectileHit {
@@ -103,6 +111,8 @@ export interface SpawnProjectileInput {
   lifeMs?: number;
   /** 武器显示名（击杀事件用，默认「步枪」） */
   label?: string;
+  /** 发射时刻（ms；缺省 0 = 不参与回溯，命中按当前帧位置裁决） */
+  spawnTimeMs?: number;
 }
 
 export class ProjectileSim {
@@ -129,6 +139,7 @@ export class ProjectileSim {
       traveled: 0,
       maxRange: input.maxRange ?? BULLET_MAX_RANGE,
       lifeMs: input.lifeMs ?? BULLET_LIFE_MS,
+      spawnTimeMs: input.spawnTimeMs ?? 0,
     };
     this.projectiles.push(projectile);
     this.stats.spawned += 1;
@@ -190,11 +201,18 @@ export class ProjectileSim {
         }
         if (obstacleHit) break;
 
-        // 命中判定：活着的敌方目标，水平距离 ≤ 命中半径 且 垂直偏差 ≤ 半高
+        // 命中判定：活着的敌方目标，水平距离 ≤ 命中半径 且 垂直偏差 ≤ 半高。
+        // 有限历史回溯：目标提供 sampleAt 时，用弹丸发射时刻（射手瞄准时刻）的目标
+        // 位置裁决，而非当前帧位置（弹丸飞行中目标已移动——补偿射手视角）。
+        // 回溯只改目标位置，不改弹道路径：挡弹检查（破坏物拦截）照常生效。
         for (const t of targets) {
           if (t.id === p.ownerId || t.team === p.team || !t.alive) continue;
           const hitRadius = t.radius ?? BULLET_HIT_RADIUS;
-          if (Math.hypot(p.x - t.x, p.z - t.z) <= hitRadius && Math.abs(p.y - t.y) <= BULLET_HEIGHT_HALF) {
+          const hist = t.sampleAt ? t.sampleAt(p.spawnTimeMs) : null;
+          const tx = hist ? hist.x : t.x;
+          const ty = hist ? hist.y : t.y;
+          const tz = hist ? hist.z : t.z;
+          if (Math.hypot(p.x - tx, p.z - tz) <= hitRadius && Math.abs(p.y - ty) <= BULLET_HEIGHT_HALF) {
             hit = {
               projectileId: p.id,
               ownerId: p.ownerId,

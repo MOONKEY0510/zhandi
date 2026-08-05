@@ -38,6 +38,14 @@ export const BULLET_HIT_RADIUS = 0.6 as const;
 export const BULLET_HEIGHT_HALF = 1.2 as const;
 export const BULLET_MAX_RANGE = 200 as const;
 export const BULLET_LIFE_MS = 4000 as const;
+
+/**
+ * 有限历史回溯窗口（lag compensation，阶段 8 第十九批）。
+ * 命中裁决时，目标位置按「弹丸发射时刻」（射手瞄准时刻）回溯采样，而非弹丸到达时刻——
+ * 100ms RTT 下客户端插值缓冲显示的目标位置滞后于服务端权威位置，不回溯则移动目标必然打空。
+ * 超窗（> 本窗口）的采样请求返回 null，调用方回退到当前帧位置（载具等无历史目标同理）。
+ */
+export const HIT_REWIND_WINDOW_MS = 500 as const;
 /** 服务端权威重生延迟（ms）：玩家死亡后经此延迟自动在队伍出生点复活 */
 export const RESPAWN_DELAY_MS = 3000 as const;
 /** 回合结束到自动开新回合的间隔（ms） */
