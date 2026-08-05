@@ -19,6 +19,8 @@ import { ClientPrediction, type ReconcileResult } from './ClientPrediction.ts';
 
 /** 原始传输抽象：发送字节 + 消息回调（NetSimulator 与 WebSocket 都满足） */
 export interface RawTransport {
+  /** 建立连接（等待底层就绪；重连时重新调用） */
+  connect(): Promise<void>;
   send(bytes: Uint8Array): void;
   onMessage(cb: (bytes: Uint8Array) => void): void;
   onClose(cb: (reason: string) => void): void;
@@ -118,6 +120,13 @@ export class NetClient {
   private lastPingClientTime = 0;
   private snapshotsReceived = 0;
   private inputsSent = 0;
+  /** 握手重试：hello 丢失/延迟时超时重发（模拟 UDP 场景下第一个包也会丢） */
+  private helloTimer: ReturnType<typeof setTimeout> | null = null;
+  private helloAttempts = 0;
+  /** join 重试：join 消息丢失时超时重发 */
+  private joinTimer: ReturnType<typeof setTimeout> | null = null;
+  private joinAttempts = 0;
+  private joinedRoom = false;
 
   onSnapshot: ((players: Map<string, InterpolatedPlayer>, snapshot: SnapshotData) => void) | null = null;
   onRoomState: ((state: RoomState) => void) | null = null;
@@ -143,11 +152,17 @@ export class NetClient {
       (() => {
         const raw = new WebSocketTransport(url);
         if (this.simulator) {
-          // 模拟器包装出站方向：客户端发送 → 模拟延迟/丢包 → 真实 WebSocket
-          this.simulator.onReceive = (bytes) => raw.send(bytes);
+          // 双向网络模拟：出站（发送 → 延迟/丢包 → 真实 WebSocket）与入站（真实接收 → 延迟/丢包 → 客户端）对称
+          const outSim = this.simulator;
+          const inSim = new NetSimulator(outSim.getOptions());
+          outSim.onReceive = (bytes) => raw.send(bytes);
           return {
-            send: (bytes) => this.simulator!.send(bytes),
-            onMessage: (cb) => raw.onMessage(cb),
+            connect: () => raw.connect(),
+            send: (bytes) => outSim.send(bytes),
+            onMessage: (cb) => {
+              inSim.onReceive = (bytes) => cb(bytes);
+              raw.onMessage((bytes) => inSim.send(bytes));
+            },
             onClose: (cb) => raw.onClose(cb),
             close: () => raw.close(),
           };
@@ -170,11 +185,12 @@ export class NetClient {
     await this.connectTransport();
     this.sendHello();
     this.startPing();
+    this.scheduleHelloRetry();
   }
 
   /** 建立传输并绑定消息/断线回调 */
   private async connectTransport(): Promise<void> {
-    await (this.transport as WebSocketTransport).connect?.();
+    await this.transport.connect();
     this.transport.onMessage((bytes) => this.dispatch(bytes));
     this.transport.onClose((reason) => {
       if (this.manualClose) return;
@@ -185,11 +201,39 @@ export class NetClient {
   }
 
   private sendHello(): void {
+    this.helloAttempts += 1;
     this.send({ kind: 'hello', protocolVersion: PROTOCOL_VERSION, playerId: this.playerId, displayName: this.displayName });
   }
 
+  /** hello_ack 超时重发：首包在丢包网络下可能丢失，最多重试 3 次 */
+  private scheduleHelloRetry(): void {
+    if (this.helloTimer) clearTimeout(this.helloTimer);
+    this.helloTimer = setTimeout(() => {
+      this.helloTimer = null;
+      if (this.connected || this.helloAttempts >= 3) return;
+      this.sendHello();
+      this.scheduleHelloRetry();
+    }, 1000);
+  }
+
   joinRoom(roomId: string): void {
+    this.roomId = roomId;
+    this.joinedRoom = false;
+    this.joinAttempts = 0;
     this.send({ kind: 'join', roomId });
+    this.scheduleJoinRetry();
+  }
+
+  /** join_ack 超时重发：丢包网络下 join 可能丢失，最多重试 3 次 */
+  private scheduleJoinRetry(): void {
+    if (this.joinTimer) clearTimeout(this.joinTimer);
+    this.joinTimer = setTimeout(() => {
+      this.joinTimer = null;
+      if (this.joinedRoom || this.joinAttempts >= 3 || !this.roomId) return;
+      this.joinAttempts += 1;
+      this.send({ kind: 'join', roomId: this.roomId });
+      this.scheduleJoinRetry();
+    }, 500);
   }
 
   /** 发送移动/开火输入（自动附加 seq 与本地 tick；挂载预测时同步推进本地预测） */
@@ -224,6 +268,11 @@ export class NetClient {
     };
   }
 
+  /** 协议握手是否完成（收到 hello_ack；connect() 只保证传输就绪） */
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
   disconnect(): void {
     this.manualClose = true;
     if (this.reconnectTimer) {
@@ -233,6 +282,14 @@ export class NetClient {
     if (this.pingTimer) {
       clearTimeout(this.pingTimer);
       this.pingTimer = null;
+    }
+    if (this.helloTimer) {
+      clearTimeout(this.helloTimer);
+      this.helloTimer = null;
+    }
+    if (this.joinTimer) {
+      clearTimeout(this.joinTimer);
+      this.joinTimer = null;
     }
     this.transport.close();
     this.connected = false;
@@ -292,9 +349,20 @@ export class NetClient {
       case 'hello_ack':
         this.connected = true;
         this.reconnectAttempts = 0; // 握手成功：重连计数复位
+        if (this.helloTimer) {
+          clearTimeout(this.helloTimer);
+          this.helloTimer = null;
+        }
+        this.helloAttempts = 0;
         break;
       case 'join_ack':
         this.roomId = msg.roomId;
+        this.joinedRoom = true;
+        if (this.joinTimer) {
+          clearTimeout(this.joinTimer);
+          this.joinTimer = null;
+        }
+        this.joinAttempts = 0;
         this.onJoinAck?.(msg);
         break;
       case 'room_state':
@@ -347,9 +415,11 @@ export class NetClient {
   private startPing(): void {
     if (this.pingTimer) clearTimeout(this.pingTimer);
     const loop = (): void => {
-      if (!this.connected) return;
-      this.lastPingClientTime = this.now();
-      this.send({ kind: 'ping', clientTime: this.lastPingClientTime });
+      // 未连接时继续等待（连接建立慢/重连期间不中断 ping 循环）
+      if (this.connected) {
+        this.lastPingClientTime = this.now();
+        this.send({ kind: 'ping', clientTime: this.lastPingClientTime });
+      }
       this.pingTimer = setTimeout(loop, this.options.pingIntervalMs);
     };
     this.pingTimer = setTimeout(loop, this.options.pingIntervalMs);

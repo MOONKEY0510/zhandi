@@ -10,6 +10,7 @@ import {
   TICK_RATE_HZ,
   SNAPSHOT_EVERY_TICKS,
   INPUT_RATE_LIMIT_PER_SECOND,
+  INPUT_BUFFER_WINDOW,
   PLAYER_EYE_HEIGHT,
   type NetworkMessage,
   type PlayerInput,
@@ -38,12 +39,14 @@ interface Connection {
   sim: PlayerSim | null;
   /** 输入速率限制（滑动窗口） */
   inputTimes: number[];
-  /** 输入序列去重（服务端已处理的最高 seq） */
+  /** 输入序列去重（服务端已收到的最高 seq，重放检测） */
   lastSeq: number;
+  /** 乱序容忍缓冲：按 seq 升序的待应用输入（抖动导致乱序时缓冲，不丢） */
+  pendingQueue: PlayerInput[];
+  /** 已应用到模拟的最高 seq */
+  lastAppliedSeq: number;
   /** RTT 统计 */
   lastPingClientTime: number;
-  /** 最新待应用输入（下一 tick 生效） */
-  pendingInput?: PlayerInput;
 }
 
 const SPAWN = [
@@ -119,8 +122,9 @@ export class ServerApp {
       sim: null,
       inputTimes: [],
       lastSeq: -1,
+      pendingQueue: [],
+      lastAppliedSeq: -1,
       lastPingClientTime: 0,
-      pendingInput: undefined,
     };
     this.connections.set(ws, conn);
 
@@ -240,30 +244,43 @@ export class ServerApp {
       this.send(conn.ws, { kind: 'error', code: 'input_rate_limited', message: '输入频率超限' });
       return;
     }
-    // 序列检查：只接受递增 seq（拒绝乱序/重放）
-    if (msg.seq <= conn.lastSeq) {
-      this.send(conn.ws, { kind: 'error', code: 'stale_input', message: '过期输入序列' });
+    // 乱序晚到的旧包（seq 已应用过）：客户端每个 seq 只发一次，无重传机制，
+    // 因此这只可能是抖动导致的乱序到达 —— 静默丢弃（不打断玩家，也不误报攻击）。
+    if (msg.seq <= conn.lastAppliedSeq) {
       return;
     }
-    conn.lastSeq = msg.seq;
-    conn.pendingInput = msg;
+    if (msg.seq > conn.lastSeq + INPUT_BUFFER_WINDOW) {
+      // 超出乱序容忍窗口：视为非法跳跃（异常输入检测）
+      this.send(conn.ws, { kind: 'error', code: 'input_jump', message: '输入序列跳跃过大' });
+      return;
+    }
+    conn.lastSeq = Math.max(conn.lastSeq, msg.seq);
+    // 按 seq 升序插入缓冲（抖动乱序 → 缓冲等待补齐，不丢弃）
+    const queue = conn.pendingQueue;
+    let i = queue.length;
+    while (i > 0 && queue[i - 1].seq > msg.seq) i -= 1;
+    queue.splice(i, 0, msg);
   }
 
   /** 每 tick：把最新输入应用到玩家模拟，推进弹道并裁决命中 */
   private stepSimulation(tick: number, deltaSeconds: number, shouldSnapshot: boolean): void {
-    // 快照广播前应用输入（输入在上一 tick 到达，本 tick 生效）
+    // 快照广播前应用输入（输入在上一 tick 到达，本 tick 生效；乱序缓冲按 seq 顺序消费）
     for (const conn of this.connections.values()) {
       if (!conn.sim) continue;
-      if (conn.pendingInput) {
+      let applied = false;
+      while (conn.pendingQueue.length > 0) {
+        const next = conn.pendingQueue.shift()!;
+        if (next.seq <= conn.lastAppliedSeq) continue; // 理论不会发生（已过滤），防御
+        conn.lastAppliedSeq = next.seq;
         const input: PlayerSimInput = {
-          moveForward: conn.pendingInput.moveForward,
-          moveBackward: conn.pendingInput.moveBackward,
-          moveLeft: conn.pendingInput.moveLeft,
-          moveRight: conn.pendingInput.moveRight,
-          sprint: conn.pendingInput.sprint,
-          fire: conn.pendingInput.fire,
-          aimYaw: conn.pendingInput.aimYaw,
-          aimPitch: conn.pendingInput.aimPitch,
+          moveForward: next.moveForward,
+          moveBackward: next.moveBackward,
+          moveLeft: next.moveLeft,
+          moveRight: next.moveRight,
+          sprint: next.sprint,
+          fire: next.fire,
+          aimYaw: next.aimYaw,
+          aimPitch: next.aimPitch,
         };
         const result = conn.sim.step(input, deltaSeconds, this.clock.nowMs());
         if (result.corrected) this.totalCorrections += 1;
@@ -280,11 +297,12 @@ export class ServerApp {
             pitch: s.pitch,
           });
         }
-      } else {
+        applied = true;
+      }
+      if (!applied) {
         // 无输入：惯性停止（速度由钳制模型自然归零）
         conn.sim.step({ moveForward: false, moveBackward: false, moveLeft: false, moveRight: false, sprint: false, fire: false, aimYaw: conn.sim.state.yaw, aimPitch: conn.sim.state.pitch }, deltaSeconds, this.clock.nowMs());
       }
-      conn.pendingInput = undefined;
     }
 
     // 弹道推进 + 命中裁决（伤害由服务器裁决，客户端无法伪造击杀）

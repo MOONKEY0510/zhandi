@@ -21,6 +21,8 @@ export const PLAYER_SPRINT_SPEED = 7.4 as const;
 export const PLAYER_MAX_HEALTH = 100 as const;
 /** 输入速率限制（每秒最大 input 消息数，防作弊/洪水） */
 export const INPUT_RATE_LIMIT_PER_SECOND = 40 as const;
+/** 输入乱序容忍窗口（seq）：抖动导致的乱序输入在窗口内缓冲而非拒绝 */
+export const INPUT_BUFFER_WINDOW = 8 as const;
 /** 射击冷却（ms），服务端裁决的射速上限 */
 export const SERVER_FIRE_COOLDOWN_MS = 120 as const;
 /** 俯仰角钳制（弧度），客户端预测与服务端裁决共用 */

@@ -56,6 +56,11 @@ export class NetSimulator {
     Object.assign(this.opts, options);
   }
 
+  /** 当前生效选项副本（供创建对称的入站模拟器） */
+  getOptions(): NetSimOptions {
+    return { ...this.opts };
+  }
+
   /** 发送：应用丢包/限速/延迟后异步投递 */
   send(bytes: Uint8Array): void {
     if (this.disposed) return;

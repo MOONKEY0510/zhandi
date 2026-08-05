@@ -15,6 +15,10 @@ class FakeTransport implements RawTransport {
     this.sent.push(bytes);
   }
 
+  connect(): Promise<void> {
+    return Promise.resolve();
+  }
+
   onMessage(cb: (bytes: Uint8Array) => void): void {
     this.msgCb = cb;
   }
@@ -114,6 +118,55 @@ describe('NetClient（阶段 8 协议客户端）', () => {
     const stats = client.getStats();
     expect(stats.rttMs).not.toBeNull();
     expect(stats.rttMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('hello 丢失时超时自动重发，收到 ack 后停止', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', { pingIntervalMs: 0 });
+      const connectPromise = client.connect();
+      await vi.advanceTimersByTimeAsync(0); // flush 微任务：hello 已发
+      const hellos = (): number => transport.sent.filter((b) => decodeMessage(b).kind === 'hello').length;
+      expect(hellos()).toBe(1);
+      // 1s 后仍未收到 hello_ack → 自动重发
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(hellos()).toBe(2);
+      // 服务器回复 ack
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStats().connected).toBe(true);
+      // 收到 ack 后不再重发（再等 2s 验证）
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(hellos()).toBe(2);
+      await connectPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('join 丢失时超时自动重发，收到 join_ack 后停止', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', { pingIntervalMs: 0 });
+      await client.connect();
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      const joins = (): number => transport.sent.filter((b) => decodeMessage(b).kind === 'join').length;
+      client.joinRoom('room1');
+      expect(joins()).toBe(1);
+      // 500ms 后未收到 join_ack → 重发
+      await vi.advanceTimersByTimeAsync(500);
+      expect(joins()).toBe(2);
+      transport.inject({ kind: 'join_ack', roomId: 'room1', playerId: 'p1', team: 0, slot: 0, resumed: false });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStats().roomId).toBe('room1');
+      // 收到 join_ack 后不再重发
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(joins()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('错误消息触发 onError', async () => {

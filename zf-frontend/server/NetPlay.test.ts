@@ -169,10 +169,15 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
   it('网络模拟包装下 RTT 统计反映双向延迟（60ms → ≥ 40ms）', async () => {
     const raw = new NodeTransport(url);
     const sim = new NetSimulator({ latencyMs: 60 });
+    const inSim = new NetSimulator({ latencyMs: 60 });
     sim.onReceive = (bytes) => raw.send(bytes);
     const transport: RawTransport = {
+      connect: () => raw.connect(),
       send: (bytes) => sim.send(bytes),
-      onMessage: (cb) => raw.onMessage(cb),
+      onMessage: (cb) => {
+        inSim.onReceive = (bytes) => cb(bytes);
+        raw.onMessage((bytes) => inSim.send(bytes));
+      },
       onClose: (cb) => raw.onClose(cb),
       close: () => raw.close(),
     };
