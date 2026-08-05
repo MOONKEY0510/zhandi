@@ -8,6 +8,10 @@ import {
   type Snapshot,
   type RoomState,
   type JoinAck,
+  type VehicleStateMsg,
+  type VehicleEnter,
+  type VehicleExit,
+  type VehicleDrive,
 } from './protocol.ts';
 
 function roundTrip<T extends NetworkMessage>(msg: T): T {
@@ -138,5 +142,30 @@ describe('codec（阶段 8 二进制协议）', () => {
     };
     const decoded = roundTrip(msg);
     expect(decoded.players.length).toBe(32);
+  });
+
+  it('vehicle_state 往返一致（多载具：占用/摧毁/重生字段）', () => {
+    const msg: VehicleStateMsg = {
+      kind: 'vehicle_state', roomId: 'r1', tick: 77,
+      vehicles: [
+        { id: 'v1', type: 0, x: 12.5, z: -8.25, yaw: 1.2, health: 200, maxHealth: 200, team: 0, destroyed: false, respawnIn: 0, driverId: 'p1' },
+        { id: 'v2', type: 1, x: -30, z: 30, yaw: -0.5, health: 0, maxHealth: 500, team: 1, destroyed: true, respawnIn: 12, driverId: null },
+      ],
+    };
+    const decoded = roundTrip(msg);
+    expect(decoded.vehicles).toHaveLength(2);
+    expect(decoded.vehicles[0]).toMatchObject({ id: 'v1', type: 0, x: 12.5, z: -8.25, health: 200, team: 0, destroyed: false, driverId: 'p1' });
+    expect(decoded.vehicles[0].yaw).toBeCloseTo(1.2, 5);
+    expect(decoded.vehicles[1]).toMatchObject({ id: 'v2', type: 1, x: -30, z: 30, health: 0, team: 1, destroyed: true, respawnIn: 12, driverId: null });
+    expect(decoded.vehicles[1].yaw).toBeCloseTo(-0.5, 5);
+  });
+
+  it('vehicle_enter / vehicle_exit / vehicle_drive 往返一致', () => {
+    const enter: VehicleEnter = { kind: 'vehicle_enter', vehicleId: 'v1' };
+    const exit: VehicleExit = { kind: 'vehicle_exit' };
+    const drive: VehicleDrive = { kind: 'vehicle_drive', forward: 0.75, turn: -0.25 };
+    expect(roundTrip(enter)).toEqual(enter);
+    expect(roundTrip(exit)).toEqual(exit);
+    expect(roundTrip(drive)).toEqual(drive);
   });
 });

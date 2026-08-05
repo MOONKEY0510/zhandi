@@ -16,12 +16,14 @@ import {
   type PlayerInput,
   type JoinAck,
   type Snapshot,
+  type VehicleDrive,
 } from '../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../shared/codec.ts';
 import { computeVisiblePlayers } from '../shared/interest.ts';
 import { SimClock } from './SimClock.ts';
 import { RoomManager } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
+import { VehicleSim } from './VehicleSim.ts';
 import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
 import { ConquestSim, type ConquestPlayerRef } from './ConquestSim.ts';
 
@@ -48,12 +50,17 @@ interface Connection {
   lastAppliedSeq: number;
   /** RTT 统计 */
   lastPingClientTime: number;
+  /** 载具驾驶输入（最近一次 vehicle_drive；每 tick 应用到玩家所在载具） */
+  vehicleDrive: { forward: number; turn: number } | null;
 }
 
 const SPAWN = [
   { x: -20, y: 0, z: -20 },
   { x: 20, y: 0, z: 20 },
 ];
+
+/** 上车半径（米）：与服务端据点捕获半径一致 */
+const VEHICLE_ENTER_RADIUS = 8;
 
 export class ServerApp {
   readonly roomManager = new RoomManager();
@@ -126,6 +133,7 @@ export class ServerApp {
       pendingQueue: [],
       lastAppliedSeq: -1,
       lastPingClientTime: 0,
+      vehicleDrive: null,
     };
     this.connections.set(ws, conn);
 
@@ -184,6 +192,7 @@ export class ServerApp {
         conn.roomId = room.id;
         // 首个玩家加入即开局（演示语义：房间创建即进入征服对局）
         room.conquest ??= new ConquestSim();
+        room.vehicles ??= new VehicleSim();
         if (room.phase === 'waiting') room.start();
         const teamSpawn = SPAWN[result.player.team];
         conn.sim = new PlayerSim(result.player.id, result.player.team, teamSpawn);
@@ -216,6 +225,21 @@ export class ServerApp {
         return;
       }
 
+      case 'vehicle_enter': {
+        this.handleVehicleEnter(conn, msg.vehicleId);
+        return;
+      }
+
+      case 'vehicle_exit': {
+        this.handleVehicleExit(conn);
+        return;
+      }
+
+      case 'vehicle_drive': {
+        this.handleVehicleDrive(conn, msg);
+        return;
+      }
+
       case 'ping': {
         conn.lastPingClientTime = msg.clientTime;
         this.send(conn.ws, { kind: 'pong', clientTime: msg.clientTime, serverTime: this.clock.nowMs() });
@@ -229,6 +253,7 @@ export class ServerApp {
       case 'room_state':
       case 'player_leave':
       case 'game_state':
+      case 'vehicle_state':
       case 'error':
         // 客户端不应向服务器发送这些消息
         this.send(conn.ws, { kind: 'error', code: 'unexpected_message', message: `客户端不应发送 ${msg.kind}` });
@@ -265,6 +290,36 @@ export class ServerApp {
     let i = queue.length;
     while (i > 0 && queue[i - 1].seq > msg.seq) i -= 1;
     queue.splice(i, 0, msg);
+  }
+
+  /** 上车：服务端校验玩家距离与司机位（半径 8m，与据点捕获半径一致） */
+  private handleVehicleEnter(conn: Connection, vehicleId: string): void {
+    const room = conn.roomId ? this.roomManager.getRoom(conn.roomId) : null;
+    if (!conn.playerId || !conn.sim || !room?.vehicles) {
+      this.send(conn.ws, { kind: 'error', code: 'vehicle_enter_failed', message: '请先加入房间' });
+      return;
+    }
+    const s = conn.sim.state;
+    const ok = room.vehicles.enter(vehicleId, conn.playerId, s.x, s.z, VEHICLE_ENTER_RADIUS);
+    if (!ok) {
+      this.send(conn.ws, { kind: 'error', code: 'vehicle_enter_failed', message: '载具不可用或距离过远' });
+    }
+  }
+
+  /** 下车：退出当前所在载具 */
+  private handleVehicleExit(conn: Connection): void {
+    const room = conn.roomId ? this.roomManager.getRoom(conn.roomId) : null;
+    if (!conn.playerId || !room?.vehicles) return;
+    room.vehicles.exit(conn.playerId);
+    conn.vehicleDrive = null;
+  }
+
+  /** 驾驶输入：仅记录（每 tick 应用到该玩家所在载具）；输入范围钳制 */
+  private handleVehicleDrive(conn: Connection, msg: VehicleDrive): void {
+    conn.vehicleDrive = {
+      forward: Math.max(-1, Math.min(1, Number.isFinite(msg.forward) ? msg.forward : 0)),
+      turn: Math.max(-1, Math.min(1, Number.isFinite(msg.turn) ? msg.turn : 0)),
+    };
   }
 
   /** 每 tick：把最新输入应用到玩家模拟，推进弹道并裁决命中 */
@@ -348,8 +403,21 @@ export class ServerApp {
       if (room.conquest.winner !== null) room.end();
     }
 
+    // 载具推进（服务端权威：驾驶输入应用到司机所在载具，空车惯性减速，摧毁重生）
+    for (const room of this.roomManager.listRooms()) {
+      if (!room.vehicles) continue;
+      for (const p of room.players) {
+        const c = this.findConnection(p.id);
+        if (!c?.vehicleDrive || !c.playerId) continue;
+        const v = room.vehicles.getVehicleByDriver(c.playerId);
+        if (v) room.vehicles.drive(v.id, c.vehicleDrive.forward, c.vehicleDrive.turn, deltaSeconds);
+      }
+      room.vehicles.update(deltaSeconds);
+    }
+
     if (shouldSnapshot) {
       this.broadcastSnapshots(tick);
+      this.broadcastVehicleStates(tick);
     }
     // 游戏状态广播（~2Hz，30Hz tick 下每 15 tick 一次）
     if (tick % 15 === 0) {
@@ -403,6 +471,14 @@ export class ServerApp {
     }
   }
 
+  /** 载具状态广播（与快照同周期 15Hz；客户端渲染/插值用） */
+  private broadcastVehicleStates(tick: number): void {
+    for (const room of this.roomManager.listRooms()) {
+      if (!room.vehicles || room.players.length === 0) continue;
+      this.broadcastToRoom(room.id, room.vehicles.getState(tick, room.id));
+    }
+  }
+
   private findConnection(playerId: string): Connection | null {
     for (const conn of this.connections.values()) {
       if (conn.playerId === playerId) return conn;
@@ -414,6 +490,9 @@ export class ServerApp {
     if (conn.playerId) {
       const room = this.roomManager.disconnect(conn.playerId);
       if (room) {
+        // 断线玩家自动下车（释放载具司机位）
+        room.vehicles?.exit(conn.playerId);
+        conn.vehicleDrive = null;
         // 通知同房间其他玩家（宽限期内保留槽位）
         this.broadcastToRoom(room.id, { kind: 'player_leave', playerId: conn.playerId, reason: 'timeout' });
       }

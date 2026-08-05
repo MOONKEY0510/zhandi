@@ -11,6 +11,7 @@ import {
   type RoomState,
   type JoinAck,
   type ServerGameState,
+  type VehicleStateMsg,
 } from '../../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../../shared/codec.ts';
 import { TICK_RATE_HZ } from '../../shared/protocol.ts';
@@ -133,6 +134,7 @@ export class NetClient {
   onRoomState: ((state: RoomState) => void) | null = null;
   onJoinAck: ((ack: JoinAck) => void) | null = null;
   onGameState: ((state: ServerGameState) => void) | null = null;
+  onVehicleState: ((state: VehicleStateMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 房间内玩家离开（超时清理/主动退出），用于移除远端实体 */
@@ -256,6 +258,24 @@ export class NetClient {
     });
   }
 
+  /** 请求上车（服务端校验距离与座位） */
+  sendVehicleEnter(vehicleId: string): void {
+    if (!this.connected) return;
+    this.send({ kind: 'vehicle_enter', vehicleId });
+  }
+
+  /** 请求下车 */
+  sendVehicleExit(): void {
+    if (!this.connected) return;
+    this.send({ kind: 'vehicle_exit' });
+  }
+
+  /** 载具驾驶输入（仅司机生效；forward/turn ∈ -1..1） */
+  sendVehicleDrive(forward: number, turn: number): void {
+    if (!this.connected) return;
+    this.send({ kind: 'vehicle_drive', forward, turn });
+  }
+
   getStats(): NetClientStats {
     const sorted = [...this.rttSamples].sort((a, b) => a - b);
     const rtt = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : null;
@@ -375,6 +395,9 @@ export class NetClient {
         break;
       case 'game_state':
         this.onGameState?.(msg);
+        break;
+      case 'vehicle_state':
+        this.onVehicleState?.(msg);
         break;
       case 'snapshot': {
         this.snapshotsReceived += 1;

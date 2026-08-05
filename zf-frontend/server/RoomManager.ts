@@ -12,6 +12,7 @@ import {
   type RoomPlayerInfo,
 } from '../shared/protocol.ts';
 import type { ConquestSim } from './ConquestSim.ts';
+import type { VehicleSim } from './VehicleSim.ts';
 
 export interface RoomPlayer {
   id: string;
@@ -46,6 +47,8 @@ export class Room {
   players: RoomPlayer[] = [];
   /** 服务端权威征服规则（首个玩家加入时由 ServerApp 创建） */
   conquest: ConquestSim | null = null;
+  /** 服务端权威载具模拟（首个玩家加入时由 ServerApp 创建） */
+  vehicles: VehicleSim | null = null;
   /** 单调递增的槽位计数器 */
   private nextSlot = 0;
 

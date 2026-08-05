@@ -49,6 +49,10 @@ export type MessageKind =
   | 'snapshot'
   | 'player_leave'
   | 'game_state'
+  | 'vehicle_state'
+  | 'vehicle_enter'
+  | 'vehicle_exit'
+  | 'vehicle_drive'
   | 'ping'
   | 'pong'
   | 'error';
@@ -166,6 +170,65 @@ export interface ObjectiveState {
   progress: number;
 }
 
+/** 载具类型（网络编码：0=jeep 1=tank 2=truck 3=motorcycle，与客户端 VehicleType 对齐） */
+export type VehicleTypeNet = 0 | 1 | 2 | 3;
+
+/**
+ * 服务端权威载具重生点（联网场景视觉与规则按此同源布局，服务端 VehicleSim 据此生成）。
+ * 位置避开据点布局（alpha 15,15 / bravo 0,0 / charlie -15,-15），贴近双方出生点便于取用。
+ */
+export const VEHICLE_SPAWN_DEFS = [
+  { id: 'v1', type: 0 as VehicleTypeNet, x: -16, z: -16, team: 0 as TeamIdNet },
+  { id: 'v2', type: 1 as VehicleTypeNet, x: 16, z: 16, team: 1 as TeamIdNet },
+] as const;
+
+export type VehicleSpawnDef = (typeof VEHICLE_SPAWN_DEFS)[number];
+
+/** 载具状态条目（服务端广播，客户端渲染/插值用） */
+export interface VehicleStateEntry {
+  id: string;
+  type: VehicleTypeNet;
+  x: number;
+  z: number;
+  yaw: number;
+  health: number;
+  maxHealth: number;
+  /** 归属队伍（0/1 = 队伍，2 = 中立） */
+  team: TeamIdNet | 2;
+  destroyed: boolean;
+  /** 剩余重生秒数（destroyed 时有效，其余为 0） */
+  respawnIn: number;
+  /** 驾驶员 playerId（空车为 null） */
+  driverId: string | null;
+}
+
+export interface VehicleStateMsg {
+  kind: 'vehicle_state';
+  roomId: string;
+  tick: number;
+  vehicles: VehicleStateEntry[];
+}
+
+/** 客户端请求上车（服务端校验距离与座位） */
+export interface VehicleEnter {
+  kind: 'vehicle_enter';
+  vehicleId: string;
+}
+
+/** 客户端请求下车（退出当前所在载具） */
+export interface VehicleExit {
+  kind: 'vehicle_exit';
+}
+
+/** 客户端载具驾驶输入（仅司机生效；服务端每 tick 应用） */
+export interface VehicleDrive {
+  kind: 'vehicle_drive';
+  /** 前向输入 -1..1（1 = 前进） */
+  forward: number;
+  /** 转向输入 -1..1（1 = 右转） */
+  turn: number;
+}
+
 /** 服务端权威游戏状态（阶段 8：征服规则权威化第一步，~2Hz 广播） */
 export interface ServerGameState {
   kind: 'game_state';
@@ -218,6 +281,10 @@ export type NetworkMessage =
   | Snapshot
   | PlayerLeave
   | ServerGameState
+  | VehicleStateMsg
+  | VehicleEnter
+  | VehicleExit
+  | VehicleDrive
   | Ping
   | Pong
   | ErrorMsg;

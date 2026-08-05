@@ -12,6 +12,9 @@ import {
   type PlayerInput,
   type RoomPhase,
   type ServerGameState,
+  type VehicleStateMsg,
+  type VehicleStateEntry,
+  type VehicleTypeNet,
   MAX_MESSAGE_BYTES,
 } from './protocol.ts';
 
@@ -34,9 +37,13 @@ const TAG_BY_KIND: Record<MessageKind, number> = {
   snapshot: 7,
   player_leave: 8,
   game_state: 9,
-  ping: 10,
-  pong: 11,
-  error: 12,
+  vehicle_state: 10,
+  vehicle_enter: 11,
+  vehicle_exit: 12,
+  vehicle_drive: 13,
+  ping: 14,
+  pong: 15,
+  error: 16,
 };
 
 const KIND_BY_TAG: Record<number, MessageKind> = Object.fromEntries(
@@ -98,6 +105,19 @@ function sizeOf(msg: NetworkMessage): number {
       }
       return size;
     }
+    case 'vehicle_state': {
+      let size = 1 + 1 + utf8Len(msg.roomId) + 4 + 1;
+      for (const v of msg.vehicles) {
+        size += 1 + utf8Len(v.id) + 1 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + 1 + 1 + utf8Len(v.driverId ?? '');
+      }
+      return size;
+    }
+    case 'vehicle_enter':
+      return 1 + 1 + utf8Len(msg.vehicleId);
+    case 'vehicle_exit':
+      return 1;
+    case 'vehicle_drive':
+      return 1 + 4 + 4;
     case 'ping':
       return 1 + 8;
     case 'pong':
@@ -200,6 +220,33 @@ function encodeBody(msg: NetworkMessage, view: DataView): void {
         view.setUint8(o, obj.owner); o += 1;
         view.setInt16(o, Math.max(-100, Math.min(100, Math.round(obj.progress))), true); o += 2;
       }
+      break;
+    case 'vehicle_state':
+      o = writeString(view, o, msg.roomId);
+      view.setUint32(o, msg.tick, true); o += 4;
+      view.setUint8(o, msg.vehicles.length); o += 1;
+      for (const v of msg.vehicles) {
+        o = writeString(view, o, v.id);
+        view.setUint8(o, v.type); o += 1;
+        view.setFloat32(o, v.x, true); o += 4;
+        view.setFloat32(o, v.z, true); o += 4;
+        view.setFloat32(o, v.yaw, true); o += 4;
+        view.setUint16(o, Math.max(0, Math.min(65535, Math.round(v.health * 100))), true); o += 2;
+        view.setUint16(o, Math.max(0, Math.min(65535, Math.round(v.maxHealth * 100))), true); o += 2;
+        view.setUint8(o, v.team); o += 1;
+        view.setUint8(o, v.destroyed ? 1 : 0); o += 1;
+        view.setUint8(o, Math.max(0, Math.min(255, Math.round(v.respawnIn)))); o += 1;
+        o = writeString(view, o, v.driverId ?? '');
+      }
+      break;
+    case 'vehicle_enter':
+      o = writeString(view, o, msg.vehicleId);
+      break;
+    case 'vehicle_exit':
+      break;
+    case 'vehicle_drive':
+      view.setFloat32(o, msg.forward, true); o += 4;
+      view.setFloat32(o, msg.turn, true); o += 4;
       break;
     case 'ping':
       view.setFloat64(o, msg.clientTime, true); o += 8;
@@ -427,6 +474,39 @@ export function decodeMessage(bytes: Uint8Array): NetworkMessage {
         objectives.push({ id, owner, progress });
       }
       return { kind, roomId, phase, tick, serverTime, maxTickets, tickets: [t0, t1], kills: [k0, k1], objectives, winner };
+    }
+    case 'vehicle_state': {
+      const roomId = r.string(64);
+      const tick = r.u32();
+      const count = r.u8();
+      const vehicles: VehicleStateMsg['vehicles'] = [];
+      for (let i = 0; i < count; i++) {
+        const id = r.string(32);
+        const type = r.u8() as VehicleTypeNet;
+        const x = r.f32();
+        const z = r.f32();
+        const yaw = r.f32();
+        const health = r.u16() / 100;
+        const maxHealth = r.u16() / 100;
+        const team = r.u8() as VehicleStateEntry['team'];
+        const destroyed = r.u8() === 1;
+        const respawnIn = r.u8();
+        const driverIdRaw = r.string(32);
+        const driverId = driverIdRaw === '' ? null : driverIdRaw;
+        vehicles.push({ id, type, x, z, yaw, health, maxHealth, team, destroyed, respawnIn, driverId });
+      }
+      return { kind, roomId, tick, vehicles };
+    }
+    case 'vehicle_enter': {
+      const vehicleId = r.string(32);
+      return { kind, vehicleId };
+    }
+    case 'vehicle_exit':
+      return { kind };
+    case 'vehicle_drive': {
+      const forward = r.f32();
+      const turn = r.f32();
+      return { kind, forward, turn };
     }
     case 'ping':
       return { kind, clientTime: r.f64() };
