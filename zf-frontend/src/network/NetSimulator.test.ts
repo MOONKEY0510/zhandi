@@ -95,4 +95,24 @@ describe('NetSimulator（阶段 8 网络模拟）', () => {
     advance(100);
     expect(sim.pendingCount).toBe(0);
   });
+
+  it('seed：相同种子丢包模式可复现（压测确定性）', () => {
+    const run = (seed: number): { received: number; dropped: number } => {
+      const sim = new NetSimulator({ lossRate: 0.3, seed });
+      let received = 0;
+      sim.onReceive = () => { received += 1; };
+      for (let i = 0; i < 20; i += 1) sim.send(new Uint8Array([i]));
+      advance(0);
+      return { received, dropped: sim.stats.dropped };
+    };
+    const a1 = run(42);
+    const a2 = run(42);
+    expect(a1).toEqual(a2);
+    // 2% 级别的丢失统计与种子相关：20 个包、30% 丢包，期望有丢有收
+    expect(a1.dropped).toBeGreaterThan(0);
+    expect(a1.received).toBeGreaterThan(0);
+    // 不同种子通常产生不同模式（确定性 PRNG 并非平凡重复）
+    const b = run(43);
+    expect(b).not.toEqual(a1);
+  });
 });

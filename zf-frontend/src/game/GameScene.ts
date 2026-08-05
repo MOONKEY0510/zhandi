@@ -6,8 +6,8 @@ import { PerformanceMonitor, PerformancePanel } from '../performance';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
-import { NetworkManager } from '../network/NetworkManager';
-import type { NetworkMessage, PlayerUpdate } from '../network/WebSocketClient';
+import { NetworkGameClient } from '../network/NetworkGameClient';
+import { TICK_RATE_HZ } from '../../shared/protocol';
 import { WeaponSystem, WeaponType, FireMode } from '../weapons/WeaponSystem';
 import { WeaponView } from '../weapons/WeaponView';
 import { MuzzleFlash } from '../weapons/MuzzleFlash';
@@ -98,7 +98,7 @@ export class GameScene {
   private physicsWorld!: PhysicsWorld;
   private player: PlayerController | null = null;
   private inputManager: InputManager;
-  private networkManager: NetworkManager | null = null;
+  private networkGameClient: NetworkGameClient | null = null;
   private remotePlayerMeshes: Map<string, THREE.Group> = new Map();
 
   // 武器
@@ -216,7 +216,7 @@ export class GameScene {
   private simulationTimeMs = 0;
   private pendingMouseMovement = { x: 0, y: 0 };
   private lastNetworkUpdate = 0;
-  private networkUpdateInterval = this.config.network.updateIntervalMs;
+  private networkUpdateInterval = 1000 / TICK_RATE_HZ;
   private killCount = 0;
   private deathCount = 0;
   private hitMarkerTime = 0;
@@ -837,33 +837,37 @@ export class GameScene {
   }
 
   async connectToServer(wsUrl: string, playerId: string): Promise<void> {
-    this.networkManager = new NetworkManager(wsUrl, playerId);
-    this.networkManager.onMessage((msg: NetworkMessage) => {
-      switch (msg.type) {
-        case 'update': {
-          const update = msg.data as PlayerUpdate;
-          if (update.id !== playerId) this.updateRemotePlayer(update);
-          break;
-        }
-        case 'leave': {
-          const leaveData = msg.data as { id: string };
-          this.removeRemotePlayer(leaveData.id);
-          break;
-        }
-      }
-    });
-    await this.networkManager.connect();
+    this.networkGameClient = new NetworkGameClient();
+    this.networkGameClient.onPlayerLeave = (id) => this.removeRemotePlayer(id);
+    this.networkGameClient.onError = (code, message) => {
+      console.warn(`[网络] 服务器错误 ${code}: ${message}`);
+    };
+    await this.networkGameClient.connect(wsUrl, this.config.network.roomId, playerId, '玩家');
   }
 
-  private updateRemotePlayer(update: PlayerUpdate): void {
-    let mesh = this.remotePlayerMeshes.get(update.id);
-    if (!mesh) {
-      mesh = this.createRemotePlayerMesh();
-      this.remotePlayerMeshes.set(update.id, mesh);
-      this.scene.add(mesh);
+  /** 每帧将远端玩家快照插值姿势同步到 mesh（创建/更新/移除，替代旧版直接瞬移） */
+  private syncRemotePlayers(): void {
+    const client = this.networkGameClient;
+    if (!client) return;
+    const poses = client.remotePlayers.getPoses();
+    for (const pose of poses.values()) {
+      let mesh = this.remotePlayerMeshes.get(pose.id);
+      if (!mesh) {
+        mesh = this.createRemotePlayerMesh();
+        this.remotePlayerMeshes.set(pose.id, mesh);
+        this.scene.add(mesh);
+      }
+      mesh.position.set(pose.x, pose.y, pose.z);
+      mesh.rotation.y = pose.yaw;
+      mesh.visible = pose.alive;
     }
-    mesh.position.set(update.x, update.y, update.z);
-    mesh.rotation.y = update.yaw;
+    // 已离开/不再出现在快照的玩家移除 mesh
+    for (const [id, mesh] of [...this.remotePlayerMeshes]) {
+      if (!poses.has(id)) {
+        this.scene.remove(mesh);
+        this.remotePlayerMeshes.delete(id);
+      }
+    }
   }
 
   private removeRemotePlayer(id: string): void {
@@ -2391,15 +2395,23 @@ export class GameScene {
     // 音频 voice 预算：真实/虚拟转换与过期清理
     this.updateAudioVoices();
 
-    // 网络
-    if (this.networkManager && this.player && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
-      const pos = this.player.getPosition();
+    // 网络：输入序列发送（服务端权威移动裁决，对齐服务器 tick 频率）+ 远端快照插值渲染
+    if (this.networkGameClient && this.player && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
+      const input = this.inputManager.state;
       const rot = this.player.getRotation();
-      if (pos) {
-        this.networkManager.sendPosition(pos.x, pos.y, pos.z, rot.yaw, rot.pitch);
-        this.lastNetworkUpdate = time;
-      }
+      this.networkGameClient.sendInput({
+        moveForward: input.forward,
+        moveBackward: input.backward,
+        moveLeft: input.left,
+        moveRight: input.right,
+        sprint: input.sprint,
+        fire: input.fire,
+        aimYaw: rot.yaw,
+        aimPitch: rot.pitch,
+      });
+      this.lastNetworkUpdate = time;
     }
+    this.syncRemotePlayers();
 
     // HUD
     const currentEquip = EQUIPMENT_ORDER[this.currentEquipmentIndex];
@@ -2533,7 +2545,11 @@ export class GameScene {
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
-    this.networkManager?.disconnect();
+    this.networkGameClient?.disconnect();
+    for (const mesh of this.remotePlayerMeshes.values()) {
+      this.scene.remove(mesh);
+    }
+    this.remotePlayerMeshes.clear();
     this.aiSystem?.dispose();
     this.hud?.dispose();
     this.mainMenu?.dispose();

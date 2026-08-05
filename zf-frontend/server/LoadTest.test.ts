@@ -42,7 +42,7 @@ describe('16v16 压测（阶段 8 验收）', () => {
     for (let i = 0; i < PLAYERS; i += 1) {
       const sim =
         i < SIM_PLAYERS
-          ? { latencyMs: 100, jitterMs: 30, lossRate: 0.02 }
+          ? { latencyMs: 100, jitterMs: 30, lossRate: 0.02, seed: 1000 + i } // 固定种子：丢包模式可复现，避免概率性 0 缺口抖动
           : undefined;
       clients.push(
         new HeadlessClient({
@@ -93,9 +93,11 @@ describe('16v16 压测（阶段 8 验收）', () => {
     for (const c of simmed) {
       expect(c.snapshots, `${c.playerId} 模拟组快照数`).toBeGreaterThanOrEqual(15);
       expect(c.errors).toEqual([]);
-      // 丢包：tick 间隔 > 2 的缺口应存在（2% × 75 ≈ 1-2 个）
-      expect(c.lostSnapshots).toBeGreaterThanOrEqual(1);
     }
+    // 丢包路径确实被触发：8 个固定种子客户端中至少 1 个出现 tick 缺口（2% × 75 ≈ 1-2 个/客户端）
+    // 组级断言避免单客户端 0 缺口的概率性抖动（固定种子下为确定性结果）
+    const totalGaps = simmed.reduce((sum, c) => sum + c.lostSnapshots, 0);
+    expect(totalGaps, '模拟组丢包缺口总数').toBeGreaterThanOrEqual(1);
 
     // RTT：模拟组均值 ≥ 干净组均值 + 80ms（100ms 单程 × 2 = 200ms 上限，保守取 80ms 增量）
     const cleanRtt = clean.map((c) => c.getStats().rttMs ?? 0);

@@ -15,6 +15,8 @@ export interface NetSimOptions {
   reorderRate?: number;
   /** 带宽上限 B/s（令牌桶），0 = 不限 */
   bandwidthBps?: number;
+  /** 随机种子（可选）：提供后丢包/抖动/乱序使用确定性 PRNG，压测可复现 */
+  seed?: number;
 }
 
 export interface NetSimStats {
@@ -33,6 +35,8 @@ interface PendingPacket {
 
 export class NetSimulator {
   private readonly opts: Required<NetSimOptions>;
+  /** 确定性 PRNG（提供 seed 时启用）；未提供 seed 时每次调用 Math.random()（保留测试 spy 能力） */
+  private readonly rng: (() => number) | null;
   onReceive: ((bytes: Uint8Array) => void) | null = null;
   private pending: PendingPacket[] = [];
   private orderCounter = 0;
@@ -48,8 +52,14 @@ export class NetSimulator {
       lossRate: options.lossRate ?? 0,
       reorderRate: options.reorderRate ?? 0,
       bandwidthBps: options.bandwidthBps ?? 0,
-    };
+      seed: options.seed,
+    } as Required<NetSimOptions>;
+    this.rng = options.seed !== undefined ? mulberry32(options.seed) : null;
     this.lastRefillMs = this.now();
+  }
+
+  private rand(): number {
+    return this.rng ? this.rng() : Math.random();
   }
 
   updateOptions(options: NetSimOptions): void {
@@ -67,7 +77,7 @@ export class NetSimulator {
     this.stats.sent += 1;
 
     // 丢包
-    if (this.opts.lossRate > 0 && Math.random() < this.opts.lossRate) {
+    if (this.opts.lossRate > 0 && this.rand() < this.opts.lossRate) {
       this.stats.dropped += 1;
       return;
     }
@@ -84,7 +94,7 @@ export class NetSimulator {
 
     // 延迟 = 基础 + 抖动
     const jitter = this.opts.jitterMs > 0
-      ? (Math.random() * 2 - 1) * this.opts.jitterMs
+      ? (this.rand() * 2 - 1) * this.opts.jitterMs
       : 0;
     const delay = Math.max(0, this.opts.latencyMs + jitter);
 
@@ -96,7 +106,7 @@ export class NetSimulator {
     }
 
     // 乱序：新包与上一个延迟窗口内的包交换投递顺序
-    if (this.opts.reorderRate > 0 && this.pending.length >= 2 && Math.random() < this.opts.reorderRate) {
+    if (this.opts.reorderRate > 0 && this.pending.length >= 2 && this.rand() < this.opts.reorderRate) {
       const prev = this.pending[this.pending.length - 2];
       packet.deliverAt = prev.deliverAt - 0.001; // 早于前一个投递
       prev.deliverAt += 0.001;
@@ -153,4 +163,16 @@ export class NetSimulator {
     // 用 Date.now()（vitest fake timers 可 mock），延迟/令牌桶都基于相对差值
     return Date.now();
   }
+}
+
+/** mulberry32：小而快的确定性 PRNG（seed 传入时用于丢包/抖动/乱序） */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }

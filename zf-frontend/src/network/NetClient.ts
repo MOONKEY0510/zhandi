@@ -133,6 +133,8 @@ export class NetClient {
   onJoinAck: ((ack: JoinAck) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
+  /** 房间内玩家离开（超时清理/主动退出），用于移除远端实体 */
+  onPlayerLeave: ((playerId: string, reason: 'left' | 'timeout' | 'kicked') => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
   onPredictionReconcile: ((result: ReconcileResult) => void) | null = null;
 
@@ -397,7 +399,7 @@ export class NetClient {
         this.onError?.(msg.code, msg.message);
         break;
       case 'player_leave':
-        // 阶段 8 后续：从插值结果中移除
+        this.onPlayerLeave?.(msg.playerId, msg.reason);
         break;
       default:
         break;

@@ -37,6 +37,9 @@ export interface GameConfig {
   };
   network: {
     serverUrl: string;
+    /** 加入的房间 ID（权威服务器 defaultRoomId，默认 lobby-1） */
+    roomId: string;
+    /** 输入发送间隔 ms（建议对齐服务器 tick：1000 / TICK_RATE_HZ） */
     updateIntervalMs: number;
   };
   simulation: {
@@ -97,8 +100,9 @@ export const DEFAULT_GAME_CONFIG: Readonly<GameConfig> = Object.freeze({
     alliesCount: 4,
   }),
   network: Object.freeze({
-    serverUrl: 'ws://localhost:8080',
-    updateIntervalMs: 50,
+    serverUrl: 'ws://localhost:8787',
+    roomId: 'lobby-1',
+    updateIntervalMs: 33,
   }),
   simulation: Object.freeze({
     stepHz: 60,
@@ -149,6 +153,7 @@ export function validateGameConfig(config: GameConfig): string[] {
     errors.push('player.sprintSpeed must be greater than or equal to player.walkSpeed');
   }
   if (config.network.updateIntervalMs <= 0) errors.push('network.updateIntervalMs must be greater than 0');
+  if (!config.network.roomId || config.network.roomId.trim() === '') errors.push('network.roomId must not be empty');
   if (config.simulation.stepHz <= 0) errors.push('simulation.stepHz must be greater than 0');
   if (config.simulation.maxSubSteps < 1) errors.push('simulation.maxSubSteps must be at least 1');
   if (config.ai.axisCount < 0 || config.ai.alliesCount < 0) errors.push('AI counts cannot be negative');
