@@ -11,6 +11,8 @@ export enum SoundType {
   UI_HOVER = 'ui_hover',
 }
 
+export type SoundCategory = 'sfx' | 'music' | 'voice';
+
 export interface SoundConfig {
   type: SoundType;
   url: string;
@@ -19,6 +21,8 @@ export interface SoundConfig {
   spatial: boolean;
   maxDistance: number;
   rolloffFactor: number;
+  /** 阶段 10：音量分组（sfx 战斗音效 / music 环境音乐 / voice 语音与 UI 提示） */
+  category: SoundCategory;
 }
 
 export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
@@ -30,6 +34,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 100,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.RELOAD]: {
     type: SoundType.RELOAD,
@@ -39,6 +44,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 10,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.FOOTSTEP]: {
     type: SoundType.FOOTSTEP,
@@ -48,6 +54,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 20,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.EXPLOSION]: {
     type: SoundType.EXPLOSION,
@@ -57,6 +64,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 150,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.TINNITUS]: {
     type: SoundType.TINNITUS,
@@ -66,6 +74,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 0,
     rolloffFactor: 0,
+    category: 'sfx',
   },
   [SoundType.HIT]: {
     type: SoundType.HIT,
@@ -75,6 +84,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 10,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.DEATH]: {
     type: SoundType.DEATH,
@@ -84,6 +94,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 50,
     rolloffFactor: 1,
+    category: 'sfx',
   },
   [SoundType.AMBIENT]: {
     type: SoundType.AMBIENT,
@@ -93,6 +104,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 0,
     rolloffFactor: 0,
+    category: 'music',
   },
   [SoundType.UI_CLICK]: {
     type: SoundType.UI_CLICK,
@@ -102,6 +114,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 0,
     rolloffFactor: 0,
+    category: 'voice',
   },
   [SoundType.UI_HOVER]: {
     type: SoundType.UI_HOVER,
@@ -111,6 +124,7 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: false,
     maxDistance: 0,
     rolloffFactor: 0,
+    category: 'voice',
   },
 };
 
@@ -119,6 +133,10 @@ export class AudioSystem {
   sounds: Map<SoundType, AudioBuffer> = new Map();
   activeSources: Map<string, AudioBufferSourceNode> = new Map();
   masterVolume: number = 1.0;
+  /** 阶段 10：音量分组（sfx/music/voice），与 masterVolume 相乘 */
+  sfxVolume: number = 1.0;
+  musicVolume: number = 1.0;
+  voiceVolume: number = 1.0;
   isMuted: boolean = false;
   listenerPosition: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
   listenerOrientation: { forward: { x: number; y: number; z: number }; up: { x: number; y: number; z: number } } = {
@@ -273,7 +291,7 @@ export class AudioSystem {
     const volumeRand = (type === SoundType.GUNSHOT || type === SoundType.HIT)
       ? 0.85 + Math.random() * 0.3
       : 1;
-    gainNode.gain.value = (volume ?? config.volume) * this.masterVolume * volumeRand;
+    gainNode.gain.value = (volume ?? config.volume) * this.masterVolume * this.groupVolume(config.category) * volumeRand;
 
     if (config.spatial && position) {
       const panner = this.createPanner(config, position);
@@ -348,6 +366,24 @@ export class AudioSystem {
 
   setVolume(volume: number): void {
     this.masterVolume = Math.max(0, Math.min(1, volume));
+  }
+
+  /** 阶段 10：设置音量分组（sfx/music/voice），入参 0-1 */
+  setGroupVolume(category: SoundCategory, volume: number): void {
+    const v = Math.max(0, Math.min(1, volume));
+    if (category === 'sfx') this.sfxVolume = v;
+    else if (category === 'music') this.musicVolume = v;
+    else this.voiceVolume = v;
+  }
+
+  getGroupVolume(category: SoundCategory): number {
+    if (category === 'sfx') return this.sfxVolume;
+    if (category === 'music') return this.musicVolume;
+    return this.voiceVolume;
+  }
+
+  private groupVolume(category: SoundCategory): number {
+    return this.getGroupVolume(category);
   }
 
   getVolume(): number {

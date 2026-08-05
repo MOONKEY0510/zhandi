@@ -3,15 +3,20 @@ import { loadGameSettings, type GameSettings } from '../config';
 export class SettingsMenu {
   container: HTMLElement;
   private readonly elements: Record<
-    'volume' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics',
+    'volumeMaster' | 'volumeSfx' | 'volumeMusic' | 'volumeVoice' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics' | 'resolutionScale' | 'reduceScreenShake',
     HTMLInputElement | HTMLSelectElement | null
   > = {
-    volume: null,
+    volumeMaster: null,
+    volumeSfx: null,
+    volumeMusic: null,
+    volumeVoice: null,
     sensitivity: null,
     adsSensitivity: null,
     fov: null,
     invertY: null,
     graphics: null,
+    resolutionScale: null,
+    reduceScreenShake: null,
   };
 
   onApply: ((settings: GameSettings) => void) | null = null;
@@ -22,7 +27,10 @@ export class SettingsMenu {
   }
 
   setSettings(settings: GameSettings): void {
-    if (this.elements.volume) this.elements.volume.value = String(settings.volume);
+    if (this.elements.volumeMaster) this.elements.volumeMaster.value = String(settings.volumeMaster);
+    if (this.elements.volumeSfx) this.elements.volumeSfx.value = String(settings.volumeSfx);
+    if (this.elements.volumeMusic) this.elements.volumeMusic.value = String(settings.volumeMusic);
+    if (this.elements.volumeVoice) this.elements.volumeVoice.value = String(settings.volumeVoice);
     if (this.elements.sensitivity) this.elements.sensitivity.value = String(settings.sensitivity);
     if (this.elements.adsSensitivity) {
       this.elements.adsSensitivity.value = String(Math.round(settings.adsSensitivityMultiplier * 100));
@@ -30,6 +38,12 @@ export class SettingsMenu {
     if (this.elements.fov) this.elements.fov.value = String(settings.fov);
     if (this.elements.invertY instanceof HTMLInputElement) this.elements.invertY.checked = settings.invertY;
     if (this.elements.graphics) this.elements.graphics.value = settings.graphics;
+    if (this.elements.resolutionScale) {
+      this.elements.resolutionScale.value = String(Math.round(settings.resolutionScale * 100));
+    }
+    if (this.elements.reduceScreenShake instanceof HTMLInputElement) {
+      this.elements.reduceScreenShake.checked = settings.reduceScreenShake;
+    }
   }
 
   show(): void {
@@ -56,17 +70,28 @@ export class SettingsMenu {
     container.innerHTML = `
       <div style="background:rgba(20,20,30,.95);padding:32px;border-radius:10px;width:420px;max-height:85vh;overflow:auto">
         <h2 style="text-align:center;margin:0 0 24px">设置</h2>
-        ${this.slider('volume', '主音量', 0, 100, 80)}
+        <h3 style="margin:0 0 12px;font-size:14px;color:#aaa">音量</h3>
+        ${this.slider('volume-master', '主音量', 0, 100, 80)}
+        ${this.slider('volume-sfx', '战斗音效', 0, 100, 80)}
+        ${this.slider('volume-music', '环境音乐', 0, 100, 60)}
+        ${this.slider('volume-voice', '语音/UI 提示', 0, 100, 80)}
+        <h3 style="margin:20px 0 12px;font-size:14px;color:#aaa">操作</h3>
         ${this.slider('sensitivity', '鼠标灵敏度', 1, 100, 50)}
         ${this.slider('ads-sensitivity', 'ADS 灵敏度倍率（%）', 10, 100, 80)}
         ${this.slider('fov', '视野 FOV', 60, 100, 75)}
         <label style="display:flex;gap:10px;align-items:center;margin-bottom:20px">
           <input type="checkbox" id="invert-y"> 反转 Y 轴
         </label>
+        <h3 style="margin:20px 0 12px;font-size:14px;color:#aaa">画面</h3>
         <label style="display:block;margin-bottom:24px">画质
           <select id="graphics" style="width:100%;padding:10px;margin-top:8px;background:#2a2a2a;border:1px solid #555;color:white;border-radius:5px">
             <option value="low">低</option><option value="medium">中</option><option value="high">高</option>
           </select>
+        </label>
+        ${this.slider('resolution-scale', '渲染分辨率比例（%）', 50, 150, 100)}
+        <h3 style="margin:20px 0 12px;font-size:14px;color:#aaa">可访问性</h3>
+        <label style="display:flex;gap:10px;align-items:center;margin-bottom:20px">
+          <input type="checkbox" id="reduce-screen-shake"> 减少屏幕震动
         </label>
         <div style="display:flex;gap:10px">
           <button id="apply-button" style="flex:1;padding:12px;background:#ffcc00;border:0;border-radius:5px;font-weight:bold;cursor:pointer">应用</button>
@@ -76,12 +101,17 @@ export class SettingsMenu {
     `;
     document.body.appendChild(container);
 
-    this.elements.volume = container.querySelector('#volume');
+    this.elements.volumeMaster = container.querySelector('#volume-master');
+    this.elements.volumeSfx = container.querySelector('#volume-sfx');
+    this.elements.volumeMusic = container.querySelector('#volume-music');
+    this.elements.volumeVoice = container.querySelector('#volume-voice');
     this.elements.sensitivity = container.querySelector('#sensitivity');
     this.elements.adsSensitivity = container.querySelector('#ads-sensitivity');
     this.elements.fov = container.querySelector('#fov');
     this.elements.invertY = container.querySelector('#invert-y');
     this.elements.graphics = container.querySelector('#graphics');
+    this.elements.resolutionScale = container.querySelector('#resolution-scale');
+    this.elements.reduceScreenShake = container.querySelector('#reduce-screen-shake');
 
     container.querySelector('#apply-button')?.addEventListener('click', () => this.onApply?.(this.readSettings()));
     container.querySelector('#cancel-button')?.addEventListener('click', () => this.onCancel?.());
@@ -91,12 +121,18 @@ export class SettingsMenu {
 
   private readSettings(): GameSettings {
     return {
-      volume: Number(this.elements.volume?.value ?? 80),
+      volumeMaster: Number(this.elements.volumeMaster?.value ?? 80),
+      volumeSfx: Number(this.elements.volumeSfx?.value ?? 80),
+      volumeMusic: Number(this.elements.volumeMusic?.value ?? 60),
+      volumeVoice: Number(this.elements.volumeVoice?.value ?? 80),
       sensitivity: Number(this.elements.sensitivity?.value ?? 50),
       adsSensitivityMultiplier: Number(this.elements.adsSensitivity?.value ?? 80) / 100,
       fov: Number(this.elements.fov?.value ?? 75),
       invertY: this.elements.invertY instanceof HTMLInputElement && this.elements.invertY.checked,
       graphics: (this.elements.graphics?.value ?? 'medium') as GameSettings['graphics'],
+      resolutionScale: Number(this.elements.resolutionScale?.value ?? 100) / 100,
+      reduceScreenShake:
+        this.elements.reduceScreenShake instanceof HTMLInputElement && this.elements.reduceScreenShake.checked,
     };
   }
 

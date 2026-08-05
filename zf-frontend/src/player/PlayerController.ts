@@ -53,6 +53,8 @@ export class PlayerController {
   // 屏幕震动
   private shakeAmount = 0;
   private shakeDecay = 0;
+  /** 阶段 10：屏幕震动幅度乘数（reduceScreenShake=0.3，默认 1） */
+  private shakeMultiplier = 1;
 
   // 头部摆动
   private bobPhase = 0;
@@ -248,6 +250,8 @@ export class PlayerController {
       fov: settings.fov,
       invertY: settings.invertY,
     };
+    // 阶段 10：可访问性——减少屏幕震动（乘 0.3）
+    this.shakeMultiplier = settings.reduceScreenShake ? 0.3 : 1;
   }
 
   private updateCameraRecoil(dt: number): void {
@@ -294,9 +298,9 @@ export class PlayerController {
     this.camera.rotation.x = this.pitch + this.cameraRecoilPitch;
   }
 
-  // 触发屏幕震动
+  // 触发屏幕震动（阶段 10：reduceScreenShake 时幅度乘 0.3）
   addShake(amount: number, decay: number = 5): void {
-    this.shakeAmount = Math.max(this.shakeAmount, amount);
+    this.shakeAmount = Math.max(this.shakeAmount, amount * this.shakeMultiplier);
     this.shakeDecay = decay;
   }
 

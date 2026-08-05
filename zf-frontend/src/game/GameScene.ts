@@ -737,11 +737,17 @@ export class GameScene {
 
   private applySettings(settings: GameSettings): void {
     const savedSettings = saveGameSettings(settings);
-    this.audioSystem?.setVolume(savedSettings.volume / 100);
+    // 阶段 10：音量分组（主/音效/音乐/语音）
+    this.audioSystem?.setVolume(savedSettings.volumeMaster / 100);
+    this.audioSystem?.setGroupVolume('sfx', savedSettings.volumeSfx / 100);
+    this.audioSystem?.setGroupVolume('music', savedSettings.volumeMusic / 100);
+    this.audioSystem?.setGroupVolume('voice', savedSettings.volumeVoice / 100);
     this.player?.applySettings(savedSettings);
-    // 画质档位：低画质关闭阴影并固定 1x；中/高开启阴影并启用动态分辨率
+    // 画质档位：低画质关闭阴影并固定 1x；中/高开启阴影并按分辨率比例缩放（与动态分辨率协同）
     this.graphicsLevel = savedSettings.graphics;
-    this.basePixelRatio = savedSettings.graphics === 'low' ? 1 : Math.min(window.devicePixelRatio, 2);
+    this.basePixelRatio = savedSettings.graphics === 'low'
+      ? 1
+      : Math.min(window.devicePixelRatio * savedSettings.resolutionScale, 2);
     this.renderer.shadowMap.enabled = savedSettings.graphics !== 'low';
     this.dynamicResolution.reset();
     this.appliedPixelRatio = -1; // 下一帧强制应用新的像素比
