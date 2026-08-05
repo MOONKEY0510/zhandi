@@ -3,7 +3,6 @@ export type { PerformanceReport, PerformanceSnapshot } from './PerformanceMonito
 export { PerformancePanel } from './PerformancePanel';
 export { PerformanceBudgetManager, DEFAULT_BUDGET } from './PerformanceBudget';
 export type { PerformanceBudget, RendererStats } from './PerformanceBudget';
-export { PerformanceOptimizer } from './PerformanceOptimizer';
 export { FrameBudget, FRAME_BUDGET_TABLE } from './FrameBudget';
 export type { FrameBudgetSectionId, FrameBudgetSectionDef, FrameBudgetSectionStats } from './FrameBudget';
 export { LongTaskMonitor } from './LongTaskMonitor';
