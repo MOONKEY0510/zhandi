@@ -114,6 +114,9 @@ export class HUD {
   private lastScoreText = '';
   private lastLowAmmoWarningVisible: boolean | null = null;
   private lastReloadBarVisible: boolean | null = null;
+  private lastAxisTickets = -1;
+  private lastAlliesTickets = -1;
+  private lastControlPointsKey = '';
   /** 阶段 9：实际 DOM 写入次数（测试断言 + 性能观测：每帧 DOM 写入是否随数据去重） */
   domWriteCount = 0;
 
@@ -424,16 +427,24 @@ export class HUD {
       }
     }
 
-    // 征服模式 UI
-    if (data.axisTickets !== undefined && this.elements.axisTickets) {
+    // 征服模式 UI（阶段 9：兵力值/控制点只在数据变化时写 DOM）
+    if (data.axisTickets !== undefined && this.elements.axisTickets && data.axisTickets !== this.lastAxisTickets) {
       this.elements.axisTickets.textContent = data.axisTickets.toString();
+      this.lastAxisTickets = data.axisTickets;
+      this.domWriteCount += 1;
     }
-    if (data.alliesTickets !== undefined && this.elements.alliesTickets) {
+    if (data.alliesTickets !== undefined && this.elements.alliesTickets && data.alliesTickets !== this.lastAlliesTickets) {
       this.elements.alliesTickets.textContent = data.alliesTickets.toString();
+      this.lastAlliesTickets = data.alliesTickets;
+      this.domWriteCount += 1;
     }
     if (data.controlPoints) {
-      const cpElements = [this.elements.cpA, this.elements.cpB, this.elements.cpC];
-      data.controlPoints.forEach((cp, i) => {
+      const key = data.controlPoints.map((cp) => `${cp.id}:${cp.owner}:${cp.progress.toFixed(2)}`).join('|');
+      if (key !== this.lastControlPointsKey) {
+        this.lastControlPointsKey = key;
+        this.domWriteCount += 1;
+        const cpElements = [this.elements.cpA, this.elements.cpB, this.elements.cpC];
+        data.controlPoints.forEach((cp, i) => {
         const el = cpElements[i];
         if (!el) return;
         if (cp.owner === 'axis') {
@@ -446,7 +457,8 @@ export class HUD {
           el.style.background = 'rgba(100,100,100,0.5)';
           el.style.borderColor = '#888';
         }
-      });
+        });
+      }
     }
 
     // 准星扩散：移动/射击时扩大

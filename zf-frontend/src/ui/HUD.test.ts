@@ -114,4 +114,33 @@ describe('HUD（阶段 9 P0：只在数据变化时写 DOM）', () => {
     expect(hud.domWriteCount).toBeGreaterThan(afterReload);
     hud.dispose();
   });
+
+  it('据点 UI（兵力值/控制点）只在数据变化时写 DOM', () => {
+    const hud = mount();
+    const axisTickets = hud.container.querySelector<HTMLElement>('#axis-ticket-count')!;
+    const alliesTickets = hud.container.querySelector<HTMLElement>('#allies-ticket-count')!;
+    const cpA = hud.container.querySelector<HTMLElement>('#cp-A')!;
+    const cps = (owner: string) => [{ id: 'A', owner, progress: 0.5 }, { id: 'B', owner: 'allies', progress: 0.2 }, { id: 'C', owner: 'allies', progress: 0 }];
+
+    hud.update(baseData({ axisTickets: 100, alliesTickets: 100, controlPoints: cps('axis') }), 0);
+    expect(axisTickets.textContent).toBe('100');
+    expect(alliesTickets.textContent).toBe('100');
+    expect(cpA.style.background).toContain('rgba(255, 68, 68'); // axis 红色
+    const afterFirst = hud.domWriteCount;
+
+    // 数据未变：零写入
+    hud.update(baseData({ axisTickets: 100, alliesTickets: 100, controlPoints: cps('axis') }), 16);
+    expect(hud.domWriteCount).toBe(afterFirst);
+
+    // 兵力变化：只写兵力文本
+    hud.update(baseData({ axisTickets: 95, alliesTickets: 100, controlPoints: cps('axis') }), 32);
+    expect(axisTickets.textContent).toBe('95');
+
+    // 控制点归属变化：重绘据点
+    const beforeCp = hud.domWriteCount;
+    hud.update(baseData({ axisTickets: 95, alliesTickets: 100, controlPoints: cps('allies') }), 48);
+    expect(hud.domWriteCount).toBeGreaterThan(beforeCp);
+    expect(cpA.style.background).toContain('rgba(68, 136, 255'); // allies 蓝色
+    hud.dispose();
+  });
 });
