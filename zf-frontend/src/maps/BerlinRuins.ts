@@ -28,6 +28,9 @@ export class BerlinRuins {
   buildings: THREE.Group[] = [];
   rubble: THREE.Group[] = [];
   collisionObjects: THREE.Object3D[] = [];
+  /** 阶段 9：装饰物实例化——碎片/废墟由独立 Mesh 合并为 InstancedMesh（draw call 150+ → 2） */
+  debrisInstances: THREE.InstancedMesh | null = null;
+  rubbleInstances: THREE.InstancedMesh | null = null;
 
   constructor(scene: THREE.Scene, config: MapConfig = DEFAULT_MAP_CONFIG) {
     this.scene = scene;
@@ -106,53 +109,79 @@ export class BerlinRuins {
   }
 
   private createRubble(): void {
-    for (let i = 0; i < this.config.rubbleCount; i++) {
-      const rubble = new THREE.Group();
+    // 阶段 9：50 个独立 Box Mesh → 单个 InstancedMesh（单位立方体 + per-instance 矩阵缩放/旋转/位移）
+    // 碰撞保留：InstancedMesh 原生支持 Raycaster 命中（world 坐标 hit.point），直接加入 collisionObjects
+    const count = this.config.rubbleCount;
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x4a4a4a,
+      roughness: 0.9,
+      metalness: 0.1,
+    });
+    const instances = new THREE.InstancedMesh(geometry, material, count);
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const scale = new THREE.Vector3();
+    const pos = new THREE.Vector3();
 
+    // 随机调用顺序与原实现一致（同一种子下布局不变）
+    for (let i = 0; i < count; i++) {
       const size = 0.5 + gameplayRandom() * 2;
-      const geometry = new THREE.BoxGeometry(size, size, size);
-      const material = new THREE.MeshStandardMaterial({
-        color: 0x4a4a4a,
-        roughness: 0.9,
-        metalness: 0.1,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-
       const x = (gameplayRandom() - 0.5) * (this.config.size - 10);
       const z = (gameplayRandom() - 0.5) * (this.config.size - 10);
-
-      mesh.position.set(x, size / 2, z);
-      mesh.rotation.set(
+      euler.set(
         gameplayRandom() * Math.PI,
         gameplayRandom() * Math.PI,
         gameplayRandom() * Math.PI
       );
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      rubble.add(mesh);
-
-      this.scene.add(rubble);
-      this.rubble.push(rubble);
-      this.collisionObjects.push(mesh);
+      quat.setFromEuler(euler);
+      scale.set(size, size, size);
+      pos.set(x, size / 2, z);
+      matrix.compose(pos, quat, scale);
+      instances.setMatrixAt(i, matrix);
     }
+
+    instances.instanceMatrix.needsUpdate = true;
+    instances.castShadow = true;
+    instances.receiveShadow = true;
+    // Raycaster 对 InstancedMesh 依赖 boundingSphere 裁剪，必须计算
+    instances.computeBoundingSphere();
+    this.scene.add(instances);
+    this.rubbleInstances = instances;
+    this.collisionObjects.push(instances);
   }
 
   private createDebris(): void {
+    // 阶段 9：100 个共享几何/材质的独立 Dodecahedron → 单个 InstancedMesh（纯装饰，不参与碰撞）
     const debrisGeometry = new THREE.DodecahedronGeometry(0.3, 0);
     const debrisMaterial = new THREE.MeshStandardMaterial({
       color: 0x3a3a3a,
       roughness: 0.9,
     });
+    const count = 100;
+    const instances = new THREE.InstancedMesh(debrisGeometry, debrisMaterial, count);
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const scale = new THREE.Vector3(1, 1, 1);
+    const pos = new THREE.Vector3();
 
-    for (let i = 0; i < 100; i++) {
-      const debris = new THREE.Mesh(debrisGeometry, debrisMaterial);
+    for (let i = 0; i < count; i++) {
       const x = (gameplayRandom() - 0.5) * this.config.size;
       const z = (gameplayRandom() - 0.5) * this.config.size;
-      debris.position.set(x, 0.15, z);
-      debris.rotation.set(gameplayRandom() * Math.PI, gameplayRandom() * Math.PI, 0);
-      debris.castShadow = true;
-      this.scene.add(debris);
+      euler.set(gameplayRandom() * Math.PI, gameplayRandom() * Math.PI, 0);
+      quat.setFromEuler(euler);
+      pos.set(x, 0.15, z);
+      matrix.compose(pos, quat, scale);
+      instances.setMatrixAt(i, matrix);
     }
+
+    instances.instanceMatrix.needsUpdate = true;
+    instances.castShadow = true;
+    instances.computeBoundingSphere();
+    this.scene.add(instances);
+    this.debrisInstances = instances;
   }
 
   private createStreets(): void {
@@ -230,6 +259,14 @@ export class BerlinRuins {
   }
 
   dispose(): void {
+    if (this.debrisInstances) {
+      this.scene.remove(this.debrisInstances);
+      this.debrisInstances = null;
+    }
+    if (this.rubbleInstances) {
+      this.scene.remove(this.rubbleInstances);
+      this.rubbleInstances = null;
+    }
     this.buildings.forEach(building => {
       this.scene.remove(building);
     });
