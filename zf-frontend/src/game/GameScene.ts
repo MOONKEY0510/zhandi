@@ -32,7 +32,7 @@ import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
-import { MineSystem } from '../equipment/MineSystem';
+import { MineSystem, type MineTriggerTarget } from '../equipment/MineSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
 import { VISUAL_PROFILES, resolveVisualProfileId, colorTemperatureToRGB } from '../environment/VisualProfile';
 import { WeatherMaterialLink } from '../environment/WeatherMaterialLink';
@@ -116,6 +116,10 @@ export class GameScene {
   /** 阶段 9：CPU 各阶段帧预算采集（主循环埋点，互斥分段测量） */
   private readonly frameBudget = new FrameBudget();
   private lastPerformanceCapture = 0;
+  /** 小地图敌人降频（200ms 一次 filter/map，避免每帧分配 bots 数组） */
+  private lastMinimapEnemiesUpdate = 0;
+  /** 地雷触发目标缓冲（复用数组，避免每帧 filter/map 分配） */
+  private readonly mineTargets: MineTriggerTarget[] = [];
   private physicsWorld!: PhysicsWorld;
   private player: PlayerController | null = null;
   private inputManager: InputManager;
@@ -2626,18 +2630,13 @@ export class GameScene {
 
     // 战术装备
     this.equipmentSystem.update(dt, time);
-    // 地雷触发检测：以敌方载具为目标
-    this.mineSystem.update(
-      dt,
-      this.vehicleSystem.vehicles
-        .filter((v) => !v.destroyed)
-        .map((v) => ({
-          position: v.mesh.position,
-          alive: !v.destroyed,
-          team: v.team,
-          vehicle: v,
-        })),
-    );
+    // 地雷触发检测：以敌方载具为目标（复用目标缓冲，避免每帧 filter/map 分配）
+    this.mineTargets.length = 0;
+    for (const v of this.vehicleSystem.vehicles) {
+      if (v.destroyed) continue;
+      this.mineTargets.push({ position: v.mesh.position, alive: !v.destroyed, team: v.team, vehicle: v });
+    }
+    this.mineSystem.update(dt, this.mineTargets);
     this.handleEquipmentDamage(time);
 
     // AI
@@ -2809,13 +2808,17 @@ export class GameScene {
       time
     );
 
-    this.hud.updateMinimapEnemies(
-      this.aiSystem.bots.filter(b => b.state !== 'dead').map(b => ({
-        x: b.mesh.position.x,
-        z: b.mesh.position.z,
-        isFriendly: b.team === this.conquestMode.playerTeam,
-      }))
-    );
+    // 小地图敌人（降频：200ms 一次，避免每帧 filter/map 分配 bots 数组）
+    if (time - this.lastMinimapEnemiesUpdate > 200) {
+      this.hud.updateMinimapEnemies(
+        this.aiSystem.bots.filter(b => b.state !== 'dead').map(b => ({
+          x: b.mesh.position.x,
+          z: b.mesh.position.z,
+          isFriendly: b.team === this.conquestMode.playerTeam,
+        }))
+      );
+      this.lastMinimapEnemiesUpdate = time;
+    }
 
     // 计分板（降频：每 500ms 更新一次）
     if (time - this.lastScoreboardUpdate > 500) {

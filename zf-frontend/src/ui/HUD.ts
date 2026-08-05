@@ -27,8 +27,21 @@ export interface HUDData {
   controlPoints?: { id: string; owner: string; progress: number }[];
 }
 
+/** 小地图 Canvas 重绘间隔 ms（阶段 9 P0 降频：10Hz，只在数据变化时写 Canvas） */
+export const MINIMAP_REFRESH_MS = 100;
+
+/**
+ * 降频判定（阶段 9 P0：小地图/低频 UI 只在数据变化时写 DOM/Canvas）。
+ * 距离上次重绘 ≥ interval 才重绘；初始（lastDraw ≤ 0，尚未绘制过）立即重绘。
+ */
+export function shouldRedrawMinimap(lastDrawMs: number, currentTimeMs: number, intervalMs = MINIMAP_REFRESH_MS): boolean {
+  if (lastDrawMs <= 0) return true;
+  return currentTimeMs - lastDrawMs >= intervalMs;
+}
+
 export class HUD {
   container: HTMLElement;
+  private lastMinimapDraw = 0;
   private reloadBar: HTMLElement | null = null;
   private reloadProgress: HTMLElement | null = null;
   private crosshairTop: HTMLElement | null = null;
@@ -401,7 +414,7 @@ export class HUD {
     this.crosshairSpread += (targetSpread - this.crosshairSpread) * 0.15;
     this.updateCrosshairSpread();
 
-    this.updateMinimap(data.position);
+    this.updateMinimap(data.position, currentTime);
     this.updateKillFeed(currentTime);
   }
 
@@ -425,7 +438,10 @@ export class HUD {
     this.enemies = enemies;
   }
 
-  private updateMinimap(playerPos: { x: number; y: number; z: number }): void {
+  private updateMinimap(playerPos: { x: number; y: number; z: number }, currentTime: number): void {
+    // 小地图降频（阶段 9 P0：只在数据变化时写 Canvas，默认 10Hz 重绘）
+    if (!shouldRedrawMinimap(this.lastMinimapDraw, currentTime)) return;
+    this.lastMinimapDraw = currentTime;
     const canvas = this.elements.minimap;
     if (!canvas) return;
 
