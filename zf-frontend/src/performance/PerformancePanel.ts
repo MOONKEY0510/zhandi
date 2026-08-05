@@ -15,6 +15,8 @@ export class PerformancePanel {
   private readonly values: HTMLPreElement;
   private readonly exportButton: HTMLButtonElement;
   private visible = false;
+  /** 最近一帧的帧预算数据（阶段 9：随导出 JSON 一并落盘，保证“有预算、有数据”完整） */
+  private lastFrameBudget: FrameBudgetSectionStats[] | null = null;
 
   constructor(private readonly monitor: PerformanceMonitor) {
     this.container = document.createElement('div');
@@ -70,6 +72,7 @@ export class PerformancePanel {
 
   update(snapshot: PerformanceSnapshot, benchmarkEnabled: boolean, extras?: PerformanceExtras): void {
     if (!this.visible) return;
+    this.lastFrameBudget = extras?.frameBudget ?? null;
 
     const lines = [
       `MODE   ${benchmarkEnabled ? 'BENCHMARK' : 'GAME'}`,
@@ -113,7 +116,12 @@ export class PerformancePanel {
   };
 
   private readonly exportReport = (): void => {
-    const report = JSON.stringify(this.monitor.exportReport(), null, 2);
+    const base = this.monitor.exportReport();
+    const report = JSON.stringify(
+      this.lastFrameBudget ? { ...base, frameBudget: this.lastFrameBudget } : base,
+      null,
+      2,
+    );
     const blob = new Blob([report], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');

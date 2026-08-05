@@ -261,6 +261,8 @@ export class GameScene {
 
   // AI 血条
   private aiHealthBars: Map<AIBot, THREE.Sprite> = new Map();
+  /** 各 bot 血条上次绘制时的血量（阶段 9：血量未变不重绘 canvas，只在数据变化时写 CanvasTexture） */
+  private aiHealthBarDrawnHealth: Map<AIBot, number> = new Map();
 
   // 状态
   private animationId = 0;
@@ -913,6 +915,7 @@ export class GameScene {
       sprite.visible = false;
       bot.mesh.add(sprite);
       this.aiHealthBars.set(bot, sprite);
+      this.aiHealthBarDrawnHealth.set(bot, -1); // 初始未绘制，首帧绘制
     }
   }
 
@@ -925,15 +928,21 @@ export class GameScene {
       const sinceDamage = currentTime - bot.lastDamageTime;
       if (sinceDamage < 3000) {
         sprite.visible = true;
-        const canvas = (sprite.material.map as THREE.CanvasTexture).image as HTMLCanvasElement;
-        const ctx = canvas.getContext('2d')!;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        const pct = bot.health / bot.maxHealth;
-        ctx.fillStyle = pct > 0.5 ? '#33ff33' : pct > 0.25 ? '#ffcc00' : '#ff3333';
-        ctx.fillRect(1, 1, (canvas.width - 2) * pct, canvas.height - 2);
-        (sprite.material.map as THREE.CanvasTexture).needsUpdate = true;
+        // 血条只在血量变化时重绘 canvas（阶段 9 P0：数据未变不写 CanvasTexture）
+        const drawnHealth = this.aiHealthBarDrawnHealth.get(bot) ?? -1;
+        if (bot.health !== drawnHealth) {
+          const canvas = (sprite.material.map as THREE.CanvasTexture).image as HTMLCanvasElement;
+          const ctx = canvas.getContext('2d')!;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          const pct = bot.health / bot.maxHealth;
+          ctx.fillStyle = pct > 0.5 ? '#33ff33' : pct > 0.25 ? '#ffcc00' : '#ff3333';
+          ctx.fillRect(1, 1, (canvas.width - 2) * pct, canvas.height - 2);
+          (sprite.material.map as THREE.CanvasTexture).needsUpdate = true;
+          this.aiHealthBarDrawnHealth.set(bot, bot.health);
+        }
+        // 透明度渐变每帧更新（廉价属性赋值，不重绘 canvas）
         const fadeAlpha = sinceDamage > 2000 ? 1 - (sinceDamage - 2000) / 1000 : 1;
         (sprite.material as THREE.SpriteMaterial).opacity = fadeAlpha;
       } else {
