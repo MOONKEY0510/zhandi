@@ -1,9 +1,15 @@
 import * as THREE from 'three';
+import type { ObjectiveOwner } from '../../shared/protocol';
 
 export enum TeamId {
   AXIS = 'axis',   // 德军
   ALLIES = 'allies', // 苏军
   NEUTRAL = 'neutral',
+}
+
+/** 协议据点归属 → 本地 TeamId（0=AXIS 1=ALLIES 2=NEUTRAL，与协议约定一致）。HUD 与场景视觉共用。 */
+export function objectiveOwnerToTeam(owner: ObjectiveOwner): TeamId {
+  return owner === 0 ? TeamId.AXIS : owner === 1 ? TeamId.ALLIES : TeamId.NEUTRAL;
 }
 
 export interface TeamInfo {

@@ -4,7 +4,13 @@
  * 纯逻辑、无 I/O，可单测；ServerApp 每 tick 喂入玩家位置，命中裁决喂入击杀事件。
  */
 
-import type { ObjectiveOwner, RoomPhase, ServerGameState, TeamIdNet } from '../shared/protocol.ts';
+import {
+  CONQUEST_OBJECTIVE_DEFS,
+  type ObjectiveOwner,
+  type RoomPhase,
+  type ServerGameState,
+  type TeamIdNet,
+} from '../shared/protocol.ts';
 
 /** 默认征服参数（与客户端本地 ConquestMode 对齐的量级） */
 export const CONQUEST_DEFAULTS = {
@@ -15,12 +21,11 @@ export const CONQUEST_DEFAULTS = {
   drainPerSecond: 2,
 } as const;
 
-/** 服务端据点定义（不渲染，只做规则；坐标与客户端地图的 A/B/C 点对应） */
-export const CONQUEST_OBJECTIVES = [
-  { id: 'alpha', x: 15, z: 15 },
-  { id: 'bravo', x: 0, z: 0 },
-  { id: 'charlie', x: -15, z: -15 },
-] as const;
+/**
+ * 服务端据点定义（不渲染，只做规则）。
+ * 与客户端联网场景视觉共用 shared 权威布局（CONQUEST_OBJECTIVE_DEFS），防漂移。
+ */
+export const CONQUEST_OBJECTIVES = CONQUEST_OBJECTIVE_DEFS;
 
 export interface ConquestPlayerRef {
   id: string;

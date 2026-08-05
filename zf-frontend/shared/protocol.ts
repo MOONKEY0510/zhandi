@@ -148,6 +148,17 @@ export interface Snapshot {
  */
 export type ObjectiveOwner = TeamIdNet | 2;
 
+/**
+ * 服务端权威征服据点布局（联网场景视觉按此渲染）。
+ * 客户端单机 AI 对局使用本地 ConquestMode 的 A/B/C 演示布局；
+ * 联网模式（收到 game_state）场景据点重定位到本布局，与服务端 ConquestSim 同源，防漂移。
+ */
+export const CONQUEST_OBJECTIVE_DEFS = [
+  { id: 'alpha', x: 15, z: 15 },
+  { id: 'bravo', x: 0, z: 0 },
+  { id: 'charlie', x: -15, z: -15 },
+] as const;
+
 export interface ObjectiveState {
   id: string;
   owner: ObjectiveOwner;

@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket } from 'ws';
 import { ServerApp } from './ServerApp.ts';
 import { NetClient, type RawTransport, type NetClientOptions } from '../src/network/NetClient.ts';
-import type { JoinAck, ServerGameState } from '../shared/protocol.ts';
+import { CONQUEST_OBJECTIVE_DEFS, type JoinAck, type ServerGameState } from '../shared/protocol.ts';
 
 /** Node（ws 包）传输：实现 RawTransport */
 class NodeTransport implements RawTransport {
@@ -123,6 +123,9 @@ describe('服务端权威游戏状态（阶段 8 征服规则端到端）', () =
     expect(s.objectives).toHaveLength(3);
     expect(s.objectives.every((o) => o.owner === 2)).toBe(true);
     expect(s.winner).toBeNull();
+    // 同源防漂移：服务端广播的据点 id 集合 = 客户端场景视觉用的权威布局（联网场景据此重定位）
+    const defIds = new Set(CONQUEST_OBJECTIVE_DEFS.map((d) => d.id));
+    expect(s.objectives.map((o) => o.id).sort()).toEqual([...defIds].sort());
   }, 10000);
 
   it('击杀闭环：队 0 瞄准队 1 连射 → 死亡扣兵力 + 击杀计数 → game_state 反映', async () => {

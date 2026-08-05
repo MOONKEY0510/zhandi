@@ -8,7 +8,7 @@ import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
 import { NetworkGameClient } from '../network/NetworkGameClient';
 import { ClientPrediction } from '../network/ClientPrediction';
-import { TICK_RATE_HZ } from '../../shared/protocol';
+import { TICK_RATE_HZ, CONQUEST_OBJECTIVE_DEFS } from '../../shared/protocol';
 import type { ServerGameState } from '../../shared/protocol';
 import { WeaponSystem, WeaponType, FireMode } from '../weapons/WeaponSystem';
 import { WeaponView } from '../weapons/WeaponView';
@@ -42,7 +42,7 @@ import type { GameEvents } from './GameEvents';
 import { GameMode, GameModeType } from './GameMode';
 import { ConquestPresenter } from './ConquestPresenter';
 import { AchievementSystem, AchievementType } from './AchievementSystem';
-import { ConquestMode, TeamId } from './ConquestMode';
+import { ConquestMode, TeamId, objectiveOwnerToTeam } from './ConquestMode';
 import { RoundFlow, RoundPhase } from './RoundFlow';
 
 const WEAPON_ORDER: WeaponType[] = [
@@ -75,6 +75,15 @@ const PANZERFAUST_VEHICLE_MULT = 3.5;
 
 interface Tracer { line: THREE.Line; life: number; maxLife: number; }
 interface Impact { mesh: THREE.Mesh; life: number; maxLife: number; }
+
+/** 场景据点视觉三件套：地面圆圈（归属色）+ 旗杆（归属色）+ 标签 Sprite */
+interface ObjectiveVisual {
+  ring: THREE.Mesh;
+  flag: THREE.Mesh;
+  label: THREE.Sprite;
+  /** 标签画布（重定位后重绘 id 用） */
+  labelCanvas: HTMLCanvasElement;
+}
 
 /** 载具炮弹实体：位置/速度/寿命，主炮带重力与爆炸 */
 interface VehicleProjectile {
@@ -187,7 +196,10 @@ export class GameScene {
   private conquestMode!: ConquestMode;
   private conquestPresenter!: ConquestPresenter;
   private roundFlow = new RoundFlow({ deploymentSeconds: 0, countdownSeconds: 5, resultsSeconds: 12 });
-  private controlPointMeshes: THREE.Mesh[] = [];
+  /** 场景据点视觉（id → 圆圈/旗杆/标签三件套）。单机按本地 A/B/C 布局，联网切换到服务端权威布局 */
+  private objectiveVisuals: Map<string, ObjectiveVisual> = new Map();
+  /** 联网模式是否已把据点视觉重定位到服务端权威布局（避免每帧重复重建） */
+  private serverObjectiveLayoutApplied = false;
 
   // 环境物体
   private environmentObjects: THREE.Object3D[] = [];
@@ -735,62 +747,98 @@ export class GameScene {
   }
 
   private setupControlPoints(): void {
+    // 初始按本地征服布局（单机 AI 对局 A/B/C）建视觉；联网收到 game_state 后切换为服务端权威布局
     for (const point of this.conquestMode.controlPoints) {
-      // 据点圆圈
-      const ringGeo = new THREE.RingGeometry(point.radius - 0.5, point.radius, 32);
-      const ringMat = new THREE.MeshBasicMaterial({
-        color: 0x888888, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
-      });
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.copy(point.position);
-      ring.position.y = 0.1;
-      this.scene.add(ring);
-      this.controlPointMeshes.push(ring);
-
-      // 据点旗帜/标记
-      const flagGeo = new THREE.CylinderGeometry(0.1, 0.1, 4, 8);
-      const flagMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
-      const flag = new THREE.Mesh(flagGeo, flagMat);
-      flag.position.copy(point.position);
-      flag.position.y = 2;
-      this.scene.add(flag);
-
-      // 据点标签
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext('2d')!;
-      ctx.font = 'bold 48px Arial';
-      ctx.fillStyle = '#ffffff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(point.id, 32, 32);
-      const texture = new THREE.CanvasTexture(canvas);
-      const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.scale.set(2, 2, 1);
-      sprite.position.copy(point.position);
-      sprite.position.y = 5;
-      this.scene.add(sprite);
+      const vis = this.buildObjectiveVisual(point.id, point.position.x, point.position.z, point.radius);
+      this.objectiveVisuals.set(point.id, vis);
     }
   }
 
-  private updateControlPointVisuals(): void {
-    const points = this.conquestMode.controlPoints;
-    for (let i = 0; i < points.length && i < this.controlPointMeshes.length; i++) {
-      const point = points[i];
-      const mesh = this.controlPointMeshes[i];
-      const mat = mesh.material as THREE.MeshBasicMaterial;
+  private buildObjectiveVisual(id: string, x: number, z: number, radius: number): ObjectiveVisual {
+    // 据点圆圈
+    const ringGeo = new THREE.RingGeometry(radius - 0.5, radius, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x888888, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, 0.1, z);
+    this.scene.add(ring);
 
-      if (point.owner === TeamId.AXIS) {
-        mat.color.setHex(0xff4444);
-      } else if (point.owner === TeamId.ALLIES) {
-        mat.color.setHex(0x4488ff);
-      } else {
-        mat.color.setHex(0x888888);
+    // 据点旗帜/标记（归属色与圆圈一致）
+    const flagGeo = new THREE.CylinderGeometry(0.1, 0.1, 4, 8);
+    const flagMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const flag = new THREE.Mesh(flagGeo, flagMat);
+    flag.position.set(x, 2, z);
+    this.scene.add(flag);
+
+    // 据点标签
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const label = this.buildLabelSprite(canvas, id, x, z);
+    return { ring, flag, label, labelCanvas: canvas };
+  }
+
+  private buildLabelSprite(canvas: HTMLCanvasElement, id: string, x: number, z: number): THREE.Sprite {
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = 'bold 48px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(id, 32, 32);
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(2, 2, 1);
+    sprite.position.set(x, 5, z);
+    this.scene.add(sprite);
+    return sprite;
+  }
+
+  private static controlPointColor(owner: TeamId): number {
+    return owner === TeamId.AXIS ? 0xff4444 : owner === TeamId.ALLIES ? 0x4488ff : 0x888888;
+  }
+
+  private updateControlPointVisuals(): void {
+    const gs = this.serverGameState;
+    if (gs && (gs.phase === 'started' || gs.phase === 'ended')) {
+      // 联网模式：据点归属由服务端 game_state 权威驱动（本地 AI 模拟不再影响场景视觉）
+      this.ensureServerObjectiveLayout();
+      for (const obj of gs.objectives) {
+        const vis = this.objectiveVisuals.get(obj.id);
+        if (!vis) continue;
+        const color = GameScene.controlPointColor(objectiveOwnerToTeam(obj.owner));
+        (vis.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+        (vis.flag.material as THREE.MeshStandardMaterial).color.setHex(color);
       }
+      return;
     }
+    // 单机模式：本地征服模拟驱动
+    for (const point of this.conquestMode.controlPoints) {
+      const vis = this.objectiveVisuals.get(point.id);
+      if (!vis) continue;
+      const color = GameScene.controlPointColor(point.owner);
+      (vis.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+      (vis.flag.material as THREE.MeshStandardMaterial).color.setHex(color);
+    }
+  }
+
+  /** 联网模式：把据点视觉重定位到服务端权威布局（alpha/bravo/charlie）并重绘标签；仅首次执行 */
+  private ensureServerObjectiveLayout(): void {
+    if (this.serverObjectiveLayoutApplied) return;
+    for (const vis of this.objectiveVisuals.values()) {
+      this.scene.remove(vis.ring);
+      this.scene.remove(vis.flag);
+      this.scene.remove(vis.label);
+    }
+    this.objectiveVisuals.clear();
+    const radius = this.conquestMode.config.captureRadius;
+    for (const def of CONQUEST_OBJECTIVE_DEFS) {
+      const vis = this.buildObjectiveVisual(def.id, def.x, def.z, radius);
+      this.objectiveVisuals.set(def.id, vis);
+    }
+    this.serverObjectiveLayoutApplied = true;
   }
 
   private updateConquestMode(dt: number, currentTime: number): void {
@@ -2502,7 +2550,7 @@ export class GameScene {
       tickets = { axis: gs.tickets[0], allies: gs.tickets[1] };
       controlPoints = gs.objectives.map(o => ({
         id: o.id,
-        owner: o.owner === 0 ? TeamId.AXIS : o.owner === 1 ? TeamId.ALLIES : TeamId.NEUTRAL,
+        owner: objectiveOwnerToTeam(o.owner),
         progress: o.progress,
       }));
     }
@@ -2598,6 +2646,7 @@ export class GameScene {
     this.inputManager.dispose();
     this.networkGameClient?.disconnect();
     this.serverGameState = null;
+    this.serverObjectiveLayoutApplied = false;
     this.clientPrediction = null;
     for (const mesh of this.remotePlayerMeshes.values()) {
       this.scene.remove(mesh);

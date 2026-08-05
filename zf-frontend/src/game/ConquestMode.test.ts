@@ -1,8 +1,14 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { ConquestMode, TeamId } from './ConquestMode';
+import { ConquestMode, TeamId, objectiveOwnerToTeam } from './ConquestMode';
 
 describe('ConquestMode', () => {
+  it('objectiveOwnerToTeam：协议据点归属映射到本地队伍（0=AXIS 1=ALLIES 2=NEUTRAL）', () => {
+    expect(objectiveOwnerToTeam(0)).toBe(TeamId.AXIS);
+    expect(objectiveOwnerToTeam(1)).toBe(TeamId.ALLIES);
+    expect(objectiveOwnerToTeam(2)).toBe(TeamId.NEUTRAL);
+  });
+
   it('captures a neutral point and drains the disadvantaged team tickets', () => {
     const mode = new ConquestMode({ captureSpeed: 100, ticketDrainPerSecond: 1 });
     const point = mode.controlPoints[0];
