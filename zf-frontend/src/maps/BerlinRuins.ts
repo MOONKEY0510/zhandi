@@ -31,6 +31,9 @@ export class BerlinRuins {
   /** 阶段 9：装饰物实例化——碎片/废墟由独立 Mesh 合并为 InstancedMesh（draw call 150+ → 2） */
   debrisInstances: THREE.InstancedMesh | null = null;
   rubbleInstances: THREE.InstancedMesh | null = null;
+  /** 阶段 9：建筑本体 + 窗户实例化（20 + 60 → 2 draw call，建筑用 per-instance 颜色） */
+  buildingInstances: THREE.InstancedMesh | null = null;
+  windowInstances: THREE.InstancedMesh | null = null;
 
   constructor(scene: THREE.Scene, config: MapConfig = DEFAULT_MAP_CONFIG) {
     this.scene = scene;
@@ -61,11 +64,34 @@ export class BerlinRuins {
   }
 
   private createBuildings(): void {
+    // 阶段 9：20 建筑（随机尺寸/颜色）+ 60 窗户 → 两个 InstancedMesh；建筑实例用 instanceColor 还原配色
     const buildingColors = [0x4a4a4a, 0x3a3a3a, 0x5a5a5a, 0x2a2a2a, 0x6a6a6a];
+    const buildingCount = this.config.buildingCount;
 
-    for (let i = 0; i < this.config.buildingCount; i++) {
-      const building = new THREE.Group();
+    const boxGeometry = new THREE.BoxGeometry(1, 1, 1); // 单位立方体 + per-instance 缩放
+    const boxMaterial = new THREE.MeshStandardMaterial({
+      roughness: 0.8,
+      metalness: 0.2,
+    });
+    const buildingInstances = new THREE.InstancedMesh(boxGeometry, boxMaterial, buildingCount);
 
+    const windowGeometry = new THREE.PlaneGeometry(1.5, 2);
+    const windowMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a1a3a,
+      emissive: 0x0a0a1a,
+      emissiveIntensity: 0.3,
+    });
+    const windowInstances = new THREE.InstancedMesh(windowGeometry, windowMaterial, buildingCount * 3);
+
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    const color = new THREE.Color();
+    let windowIndex = 0;
+
+    // 随机调用顺序与原实现一致（同一种子下地图布局不变）
+    for (let i = 0; i < buildingCount; i++) {
       const width = 8 + gameplayRandom() * 12;
       const depth = 8 + gameplayRandom() * 12;
       const height = 5 + gameplayRandom() * 15;
@@ -73,39 +99,44 @@ export class BerlinRuins {
       const x = (gameplayRandom() - 0.5) * (this.config.size - width);
       const z = (gameplayRandom() - 0.5) * (this.config.size - depth);
 
-      const geometry = new THREE.BoxGeometry(width, height, depth);
-      const color = buildingColors[Math.floor(gameplayRandom() * buildingColors.length)];
-      const material = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.8,
-        metalness: 0.2,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(x, height / 2, z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      building.add(mesh);
+      const c = buildingColors[Math.floor(gameplayRandom() * buildingColors.length)];
 
+      // 建筑本体
+      scale.set(width, height, depth);
+      pos.set(x, height / 2, z);
+      quat.identity();
+      matrix.compose(pos, quat, scale);
+      buildingInstances.setMatrixAt(i, matrix);
+      color.setHex(c);
+      buildingInstances.setColorAt(i, color);
+
+      // 窗户（原实现每建筑 3 个，贴在 z+ 面）
       for (let j = 0; j < 3; j++) {
-        const windowGeometry = new THREE.PlaneGeometry(1.5, 2);
-        const windowMaterial = new THREE.MeshStandardMaterial({
-          color: 0x1a1a3a,
-          emissive: 0x0a0a1a,
-          emissiveIntensity: 0.3,
-        });
-        const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
-        windowMesh.position.set(
-          x + (gameplayRandom() - 0.5) * (width - 2),
-          2 + gameplayRandom() * (height - 4),
-          z + (width / 2) + 0.1
-        );
-        building.add(windowMesh);
+        const wx = x + (gameplayRandom() - 0.5) * (width - 2);
+        const wy = 2 + gameplayRandom() * (height - 4);
+        const wz = z + (width / 2) + 0.1;
+        pos.set(wx, wy, wz);
+        quat.identity();
+        scale.set(1, 1, 1);
+        matrix.compose(pos, quat, scale);
+        windowInstances.setMatrixAt(windowIndex++, matrix);
       }
-
-      this.scene.add(building);
-      this.buildings.push(building);
-      this.collisionObjects.push(mesh);
     }
+
+    buildingInstances.instanceMatrix.needsUpdate = true;
+    if (buildingInstances.instanceColor) buildingInstances.instanceColor.needsUpdate = true;
+    buildingInstances.castShadow = true;
+    buildingInstances.receiveShadow = true;
+    buildingInstances.computeBoundingSphere();
+    windowInstances.instanceMatrix.needsUpdate = true;
+    windowInstances.computeBoundingSphere();
+
+    this.scene.add(buildingInstances);
+    this.scene.add(windowInstances);
+    this.buildingInstances = buildingInstances;
+    this.windowInstances = windowInstances;
+    // 碰撞保留：建筑本体原在 collisionObjects（弹道/AI 视线/交互射线共用），实例化后以 InstancedMesh 顶替
+    this.collisionObjects.push(buildingInstances);
   }
 
   private createRubble(): void {
@@ -266,6 +297,14 @@ export class BerlinRuins {
     if (this.rubbleInstances) {
       this.scene.remove(this.rubbleInstances);
       this.rubbleInstances = null;
+    }
+    if (this.buildingInstances) {
+      this.scene.remove(this.buildingInstances);
+      this.buildingInstances = null;
+    }
+    if (this.windowInstances) {
+      this.scene.remove(this.windowInstances);
+      this.windowInstances = null;
     }
     this.buildings.forEach(building => {
       this.scene.remove(building);
