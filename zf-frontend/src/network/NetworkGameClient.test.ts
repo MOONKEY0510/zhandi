@@ -203,4 +203,46 @@ describe('NetworkGameClient（阶段 8 第九批：GameScene 网络桥接层）'
     expect(prediction.stats.corrections).toBe(1);
     bridge.disconnect();
   });
+
+  it('vehicle_state 透传：onVehicleState 回调收到服务端载具广播', async () => {
+    const { bridge, transport } = await setupBridge();
+    const states: unknown[] = [];
+    bridge.onVehicleState = (s) => states.push(s);
+    transport.inject({
+      kind: 'vehicle_state',
+      roomId: 'r1',
+      tick: 3,
+      vehicles: [
+        { id: 'v1', type: 0, x: 10, z: -5, yaw: 0.5, health: 200, maxHealth: 200, team: 0, destroyed: false, respawnIn: 0, driverId: 'p1' },
+      ],
+    });
+    expect(states).toHaveLength(1);
+    const s = states[0] as { kind: string; vehicles: { id: string; driverId: string | null }[] };
+    expect(s.kind).toBe('vehicle_state');
+    expect(s.vehicles[0].id).toBe('v1');
+    expect(s.vehicles[0].driverId).toBe('p1');
+    bridge.disconnect();
+  });
+
+  it('载具消息转发：sendVehicleEnter / sendVehicleDrive / sendVehicleExit 编码正确', async () => {
+    const { bridge, transport } = await setupBridge();
+    transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+    bridge.sendVehicleEnter('v2');
+    let msg = transport.decodeLast()!;
+    expect(msg.kind).toBe('vehicle_enter');
+    if (msg.kind === 'vehicle_enter') expect(msg.vehicleId).toBe('v2');
+
+    bridge.sendVehicleDrive(0.75, -0.25);
+    msg = transport.decodeLast()!;
+    expect(msg.kind).toBe('vehicle_drive');
+    if (msg.kind === 'vehicle_drive') {
+      expect(msg.forward).toBeCloseTo(0.75, 5);
+      expect(msg.turn).toBeCloseTo(-0.25, 5);
+    }
+
+    bridge.sendVehicleExit();
+    msg = transport.decodeLast()!;
+    expect(msg.kind).toBe('vehicle_exit');
+    bridge.disconnect();
+  });
 });

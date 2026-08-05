@@ -9,7 +9,7 @@
  */
 
 import { NetClient, type NetClientStats, type RawTransport } from './NetClient.ts';
-import type { PlayerInput, ServerGameState } from '../../shared/protocol.ts';
+import type { PlayerInput, ServerGameState, VehicleStateMsg } from '../../shared/protocol.ts';
 import type { InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { RemotePlayerView } from './RemotePlayerView.ts';
 import type { NetSimulator } from './NetSimulator.ts';
@@ -45,6 +45,7 @@ export class NetworkGameClient {
   onJoinAck: ((ack: { roomId: string; team: 0 | 1; slot: number; resumed: boolean }) => void) | null = null;
   onRoomState: ((state: { roomId: string; phase: string; players: unknown[] }) => void) | null = null;
   onGameState: ((state: ServerGameState) => void) | null = null;
+  onVehicleState: ((state: VehicleStateMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
@@ -82,6 +83,7 @@ export class NetworkGameClient {
     this.client.onRoomState = (state) =>
       this.onRoomState?.({ roomId: state.roomId, phase: state.phase, players: state.players });
     this.client.onGameState = (state) => this.onGameState?.(state);
+    this.client.onVehicleState = (state) => this.onVehicleState?.(state);
     this.client.onError = (code, message) => this.onError?.(code, message);
     this.client.onDisconnect = (reason) => this.onDisconnect?.(reason);
     this.client.onPredictionReconcile = (result) => this.onPredictionReconcile?.(result);
@@ -93,6 +95,21 @@ export class NetworkGameClient {
   /** 发送输入（自动附加 seq 与本地 tick；未连接时静默丢弃） */
   sendInput(input: ClientInput): void {
     this.client?.sendInput(input);
+  }
+
+  /** 请求上车（服务端校验距离与座位） */
+  sendVehicleEnter(vehicleId: string): void {
+    this.client?.sendVehicleEnter(vehicleId);
+  }
+
+  /** 请求下车 */
+  sendVehicleExit(): void {
+    this.client?.sendVehicleExit();
+  }
+
+  /** 载具驾驶输入（forward/turn ∈ -1..1，仅司机生效） */
+  sendVehicleDrive(forward: number, turn: number): void {
+    this.client?.sendVehicleDrive(forward, turn);
   }
 
   getStats(): NetClientStats | null {

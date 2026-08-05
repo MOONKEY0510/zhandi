@@ -24,13 +24,14 @@ import { RespawnSystem } from '../player/RespawnSystem';
 import type { SoldierClassDefinition } from '../player/SoldierClass';
 import { AISystem, AIBot } from '../ai/AIBot';
 import { AIStats } from '../ai/AIStats';
+import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
+import { NetworkVehicles } from '../vehicle/NetworkVehicles';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
 import { MapManager } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
 import { MineSystem } from '../equipment/MineSystem';
-import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
 import { VISUAL_PROFILES, resolveVisualProfileId, colorTemperatureToRGB } from '../environment/VisualProfile';
 import { WeatherMaterialLink } from '../environment/WeatherMaterialLink';
@@ -163,6 +164,10 @@ export class GameScene {
   private vehicleSystem!: VehicleSystem;
   private inVehicle = false;
   private currentVehicle: { vehicle: Vehicle; isDriver: boolean } | null = null;
+  /** 联网模式载具视觉（服务端 vehicle_state 权威驱动；单机模式为 null） */
+  private networkVehicles: NetworkVehicles | null = null;
+  /** 联网模式驾驶状态（由服务端 driverId 驱动，非本地立即置位） */
+  private inNetworkVehicle = false;
 
   // 载具炮弹实体（阶段 6/7：弹道 + 爆炸闭环）
   private vehicleProjectiles: VehicleProjectile[] = [];
@@ -577,6 +582,15 @@ export class GameScene {
     }
   }
 
+  /** 联网模式移除本地单机载具（权威载具改由服务端 vehicle_state 驱动） */
+  private removeLocalVehicles(): void {
+    for (const vehicle of this.vehicleSystem.vehicles) {
+      this.scene.remove(vehicle.mesh);
+    }
+    this.vehicleSystem.vehicles.length = 0;
+    this.aiSystem.configureVehicles([]);
+  }
+
   /** 在双方营地部署载具补给站（阶段 7 P1）：同阵营载具进入半径快速维修 + 补弹 */
   private spawnSupplyStations(): void {
     const axisSpawn = this.conquestMode.teams.get(TeamId.AXIS)?.spawnPoint;
@@ -905,6 +919,13 @@ export class GameScene {
     this.networkGameClient.onGameState = (state) => {
       this.serverGameState = state;
     };
+    // 联网载具视觉：服务端权威 vehicle_state（15Hz）驱动创建/更新/移除
+    this.networkVehicles = new NetworkVehicles(this.scene);
+    this.networkGameClient.onVehicleState = (state) => {
+      this.networkVehicles?.applyState(state);
+    };
+    // 联网模式不使用本地单机载具（权威载具由服务端模拟驱动，客户端只做视觉）
+    this.removeLocalVehicles();
     this.networkGameClient.onError = (code, message) => {
       console.warn(`[网络] 服务器错误 ${code}: ${message}`);
     };
@@ -1267,6 +1288,10 @@ export class GameScene {
 
   // ====== 载具 ======
   private toggleVehicle(): void {
+    if (this.networkGameClient && this.networkVehicles) {
+      this.toggleNetworkVehicle();
+      return;
+    }
     if (this.inVehicle && this.currentVehicle) {
       // 下车
       this.currentVehicle.vehicle.exitVehicle(this.playerId);
@@ -1344,6 +1369,56 @@ export class GameScene {
       this.hud.addKillMessage('进入补给站：维修 + 弹药补充中', this.simulationTimeMs);
     }
     this.lastSupplyZoneMessage = inSupply;
+  }
+
+  // ====== 联网载具（服务端权威：vehicle_state 驱动视觉与驾驶状态） ======
+  private toggleNetworkVehicle(): void {
+    if (!this.networkGameClient || !this.networkVehicles || !this.player) return;
+    if (this.inNetworkVehicle) {
+      // 下车：通知服务端释放司机位；本地就近落地（服务端 exit 不动玩家位置）
+      const driving = this.networkVehicles.getByDriver(this.playerId);
+      this.networkGameClient.sendVehicleExit();
+      this.inNetworkVehicle = false;
+      if (driving) {
+        this.player.teleportHorizontal(driving.mesh.position.x + 2, driving.mesh.position.z + 2);
+      }
+      this.hud.addKillMessage('离开载具', this.simulationTimeMs);
+      return;
+    }
+    // 上车：查找附近未摧毁载具（交互半径 4m < 服务端校验半径 8m）
+    const pos = this.player.getPosition();
+    if (!pos) return;
+    const id = this.networkVehicles.findNear(pos.x, pos.z, 4);
+    if (id) this.networkGameClient.sendVehicleEnter(id);
+  }
+
+  /** 每帧：驾驶状态由服务端 driverId 驱动；在驾驶时路由输入 + 第三人称相机跟随 */
+  private updateNetworkVehicleControl(dt: number): void {
+    if (!this.networkGameClient || !this.networkVehicles || !this.player) return;
+    const driving = this.networkVehicles.getByDriver(this.playerId);
+    if (driving) {
+      if (!this.inNetworkVehicle) {
+        this.inNetworkVehicle = true;
+        this.hud.addKillMessage('进入载具（驾驶）', this.simulationTimeMs);
+      }
+      // 第三人称相机跟随载具
+      const vpos = driving.mesh.position;
+      this.camera.position.set(vpos.x, vpos.y + 3, vpos.z + 6);
+      this.camera.lookAt(vpos.x, vpos.y, vpos.z);
+      // 驾驶输入路由（服务端权威运动；forward/turn ∈ -1..1）
+      const input = this.inputManager.state;
+      let forward = 0;
+      let turn = 0;
+      if (input.forward) forward = 1;
+      if (input.backward) forward = -1;
+      if (input.left) turn = 1;
+      if (input.right) turn = -1;
+      this.networkGameClient.sendVehicleDrive(forward, turn);
+    } else if (this.inNetworkVehicle) {
+      // 被挤下车 / 载具被摧毁（服务端清空 driverId）→ 被动退出驾驶
+      this.inNetworkVehicle = false;
+      this.hud.addKillMessage('已离开载具', this.simulationTimeMs);
+    }
   }
 
   // ====== 载具武器弹道（阶段 6/7） ======
@@ -1558,7 +1633,7 @@ export class GameScene {
   // ====== 射击 ======
   private handleShooting(currentTime: number): void {
     if (this.healthSystem.isDead) return;
-    if (this.inVehicle) return; // 载具内用载具武器
+    if (this.inVehicle || this.inNetworkVehicle) return; // 载具内用载具武器
     if (!this.inputManager.state.fire) return;
 
     const weapon = this.weaponSystem.getCurrentWeapon();
@@ -2187,7 +2262,7 @@ export class GameScene {
   }
 
   private handleFootsteps(currentTime: number): void {
-    if (this.healthSystem.isDead || this.inVehicle) return;
+    if (this.healthSystem.isDead || this.inVehicle || this.inNetworkVehicle) return;
     if (!this.player) return;
     const input = this.inputManager.state;
     const isMoving = input.forward || input.backward || input.left || input.right;
@@ -2366,8 +2441,8 @@ export class GameScene {
     this.roundFlow.update(dt);
     if (!this.roundFlow.canSimulateCombat()) return;
 
-    // 玩家更新
-    if (this.player && !this.healthSystem.isDead && !this.inVehicle) {
+    // 玩家更新（联网驾驶时停用本地玩家控制）
+    if (this.player && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle) {
       this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
     }
     this.pendingMouseMovement.x = 0;
@@ -2375,7 +2450,7 @@ export class GameScene {
 
     // 联网权威回写：本地渲染位置向服务端预测轨迹平滑收敛
     // （水平 x/z；垂直 y 与跳跃/碰撞保留本地物理，服务端移动模型暂无 y 轴与碰撞）
-    if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle) {
+    if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle) {
       const rs = this.clientPrediction.renderState;
       const pos = this.player.getPosition();
       if (pos) {
@@ -2387,9 +2462,14 @@ export class GameScene {
       }
     }
 
-    // 载具控制
-    this.updateVehicleControl(dt);
-    this.vehicleSystem.update(dt, this.simulationTimeMs);
+    // 载具控制：联网模式走服务端权威视觉/驾驶，单机模式走本地物理模拟
+    if (this.networkGameClient && this.networkVehicles) {
+      this.networkVehicles.update(dt);
+      this.updateNetworkVehicleControl(dt);
+    } else {
+      this.updateVehicleControl(dt);
+      this.vehicleSystem.update(dt, this.simulationTimeMs);
+    }
     this.updateVehicleProjectiles(dt);
 
     // 局部破坏
@@ -2402,7 +2482,7 @@ export class GameScene {
       this.inputManager.state.left || this.inputManager.state.right;
 
     // ADS 瞄准状态
-    const isAiming = this.inputManager.state.aim && !this.inVehicle;
+    const isAiming = this.inputManager.state.aim && !this.inVehicle && !this.inNetworkVehicle;
     this.weaponView.setAiming(isAiming);
     this.player?.setAiming(isAiming);
 
@@ -2484,7 +2564,7 @@ export class GameScene {
     this.updateAudioVoices();
 
     // 网络：输入序列发送（服务端权威移动裁决，对齐服务器 tick 频率）+ 远端快照插值渲染
-    if (this.networkGameClient && this.player && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
+    if (this.networkGameClient && this.player && !this.inNetworkVehicle && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
       const input = this.inputManager.state;
       const rot = this.player.getRotation();
       this.networkGameClient.sendInput({
@@ -2514,9 +2594,18 @@ export class GameScene {
       equipName = equipConfig?.config.name || '手雷';
     }
 
-    // 交互提示
+    // 交互提示（联网模式：服务端权威载具；单机模式：本地 VehicleSystem）
     let interactionPrompt: string | null = null;
-    if (!this.inVehicle && !this.healthSystem.isDead) {
+    if (this.networkGameClient && this.networkVehicles) {
+      if (!this.inNetworkVehicle && !this.healthSystem.isDead) {
+        const playerPos = this.player?.getPosition();
+        if (playerPos && this.networkVehicles.findNear(playerPos.x, playerPos.z, 4)) {
+          interactionPrompt = '按 E 进入载具';
+        }
+      } else if (this.inNetworkVehicle) {
+        interactionPrompt = '按 E 离开载具';
+      }
+    } else if (!this.inVehicle && !this.healthSystem.isDead) {
       const playerPos = this.player?.getPosition();
       if (playerPos) {
         for (const vehicle of this.vehicleSystem.vehicles) {
@@ -2645,9 +2734,13 @@ export class GameScene {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
     this.networkGameClient?.disconnect();
+    this.networkGameClient = null;
     this.serverGameState = null;
     this.serverObjectiveLayoutApplied = false;
     this.clientPrediction = null;
+    this.networkVehicles?.clear();
+    this.networkVehicles = null;
+    this.inNetworkVehicle = false;
     for (const mesh of this.remotePlayerMeshes.values()) {
       this.scene.remove(mesh);
     }
