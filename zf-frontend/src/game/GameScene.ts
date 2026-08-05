@@ -6,6 +6,7 @@ import { PerformanceMonitor, PerformancePanel, FrameBudget, LongTaskMonitor } fr
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
+import { loadKeyBindings } from '../input/KeyBindings';
 import { NetworkGameClient } from '../network/NetworkGameClient';
 import { ClientPrediction } from '../network/ClientPrediction';
 import { TICK_RATE_HZ, CONQUEST_OBJECTIVE_DEFS } from '../../shared/protocol';
@@ -328,6 +329,8 @@ export class GameScene {
 
     this.scene.add(this.camera);
     this.inputManager = new InputManager();
+    // 阶段 10：加载持久化键位（重绑定后跨会话保持）
+    this.inputManager.applyBindings(loadKeyBindings());
 
     this.setupLights();
     this.setupDeathOverlay();

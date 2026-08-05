@@ -1,3 +1,5 @@
+import { DEFAULT_KEY_BINDINGS, buildCodeToActions, sanitizeKeyBindings, type KeyActionId, type KeyBindings } from './KeyBindings';
+
 export interface InputState {
   forward: boolean;
   backward: boolean;
@@ -45,46 +47,71 @@ export class InputManager {
 
   private fireConsumed = false;
 
-  private onKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'Space') e.preventDefault();
+  /** 阶段 10：键位绑定（默认 DEFAULT_KEY_BINDINGS，可重绑定 + 持久化） */
+  private bindings: KeyBindings = { ...DEFAULT_KEY_BINDINGS };
+  private codeToActions: Map<string, KeyActionId[]> = buildCodeToActions(this.bindings);
 
-    // 武器切换 1-4
-    if (e.code === 'Digit1') { this.notifyWeaponSwitch(0); return; }
-    if (e.code === 'Digit2') { this.notifyWeaponSwitch(1); return; }
-    if (e.code === 'Digit3') { this.notifyWeaponSwitch(2); return; }
-    if (e.code === 'Digit4') { this.notifyWeaponSwitch(3); return; }
+  /** 阶段 10：应用新键位（sanitize 后重建反向映射；返回应用后的绑定） */
+  applyBindings(bindings: Partial<KeyBindings>): KeyBindings {
+    this.bindings = sanitizeKeyBindings(bindings);
+    this.codeToActions = buildCodeToActions(this.bindings);
+    return this.bindings;
+  }
+
+  getBindings(): KeyBindings {
+    return { ...this.bindings };
+  }
+
+  /** 命中绑定动作（含重复键的全部动作） */
+  private actionsForCode(code: string): KeyActionId[] {
+    return this.codeToActions.get(code) ?? [];
+  }
+
+  private onKeyDown = (e: KeyboardEvent) => {
+    const actions = this.actionsForCode(e.code);
+
+    // 跳跃键防页面滚动 / 计分板键防焦点移动
+    if (actions.includes('jump')) e.preventDefault();
+    if (actions.includes('scoreboard')) e.preventDefault();
+
+    // 武器切换 1-4（冲突时按动作顺序取首个武器动作）
+    const weaponAction = actions.find((a) => a.startsWith('weapon_'));
+    if (weaponAction) {
+      const slot = Number(weaponAction.split('_')[1]) - 1;
+      this.notifyWeaponSwitch(slot);
+      return;
+    }
 
     // 装备切换 Q
-    if (e.code === 'KeyQ' && !this.keys.has('KeyQ')) {
+    if (actions.includes('equipment') && !this.keys.has(e.code)) {
       this.equipmentSwitchCallbacks.forEach(cb => cb(0));
     }
     // 投掷装备 G
-    if (e.code === 'KeyG' && !this.keys.has('KeyG')) {
+    if (actions.includes('grenade') && !this.keys.has(e.code)) {
       this.grenadeCallbacks.forEach(cb => cb());
     }
     // 载具 E
-    if (e.code === 'KeyE' && !this.keys.has('KeyE')) {
+    if (actions.includes('vehicle') && !this.keys.has(e.code)) {
       this.vehicleToggleCallbacks.forEach(cb => cb());
     }
     // 载具座位切换 F
-    if (e.code === 'KeyF' && !this.keys.has('KeyF')) {
+    if (actions.includes('seat') && !this.keys.has(e.code)) {
       this.seatSwitchCallbacks.forEach(cb => cb());
     }
     // 天气切换 T
-    if (e.code === 'KeyT' && !this.keys.has('KeyT')) {
+    if (actions.includes('weather') && !this.keys.has(e.code)) {
       this.weatherToggleCallbacks.forEach(cb => cb());
     }
     // Esc 设置
-    if (e.code === 'Escape') {
+    if (actions.includes('escape')) {
       this.escapeCallbacks.forEach(cb => cb());
     }
     // Tab 计分板
-    if (e.code === 'Tab') {
-      e.preventDefault();
+    if (actions.includes('scoreboard')) {
       this.scoreboardCallbacks.forEach(cb => cb(true));
     }
-    // R 换弹
-    if (e.code === 'KeyR' && !this.keys.has('KeyR')) {
+    // 换弹
+    if (actions.includes('reload') && !this.keys.has(e.code)) {
       this.reloadPressedCallbacks.forEach(cb => cb());
     }
 
@@ -93,7 +120,7 @@ export class InputManager {
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
-    if (e.code === 'Tab') {
+    if (this.actionsForCode(e.code).includes('scoreboard')) {
       this.scoreboardCallbacks.forEach(cb => cb(false));
     }
     this.keys.delete(e.code);
@@ -137,14 +164,15 @@ export class InputManager {
   }
 
   private updateState(): void {
-    this.state.forward = this.keys.has('KeyW');
-    this.state.backward = this.keys.has('KeyS');
-    this.state.left = this.keys.has('KeyA');
-    this.state.right = this.keys.has('KeyD');
-    this.state.jump = this.keys.has('Space');
-    this.state.sprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
-    this.state.crouch = this.keys.has('ControlLeft') || this.keys.has('ControlRight');
-    this.state.reload = this.keys.has('KeyR');
+    const b = this.bindings;
+    this.state.forward = this.keys.has(b.move_forward);
+    this.state.backward = this.keys.has(b.move_backward);
+    this.state.left = this.keys.has(b.move_left);
+    this.state.right = this.keys.has(b.move_right);
+    this.state.jump = this.keys.has(b.jump);
+    this.state.sprint = this.keys.has(b.sprint) || this.keys.has('ShiftRight');
+    this.state.crouch = this.keys.has(b.crouch) || this.keys.has('ControlRight');
+    this.state.reload = this.keys.has(b.reload);
   }
 
   getMouseMovement(): { x: number; y: number } {
