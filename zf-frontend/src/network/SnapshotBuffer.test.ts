@@ -96,4 +96,35 @@ describe('SnapshotBuffer（阶段 8 快照插值）', () => {
     const frozen = buf.stats(300); // 落后 766ms
     expect(frozen.frozen).toBe(true);
   });
+
+  it('丢包短时外推：按最后两帧速度继续推进', () => {
+    const buf = new SnapshotBuffer({ extrapolateMs: 200 });
+    buf.push(snap(1, 1000, [p1(0, 0)]));
+    buf.push(snap(2, 1066, [p1(10, 0)])); // 速度 ≈ 151.5 m/s
+    // 渲染时间超最新帧 100ms（≤ 200ms 外推窗）
+    const result = buf.interpolate(1166)!;
+    const player = result.get('p1')!;
+    expect(player.extrapolated).toBe(true);
+    // x = 10 + 151.5 × 0.1 ≈ 25.15
+    expect(player.x).toBeCloseTo(25.15, 1);
+  });
+
+  it('超过外推窗口：冻结在最新帧', () => {
+    const buf = new SnapshotBuffer({ extrapolateMs: 200 });
+    buf.push(snap(1, 1000, [p1(0, 0)]));
+    buf.push(snap(2, 1066, [p1(10, 0)]));
+    const result = buf.interpolate(1400)!; // 超前 334ms > 200ms
+    expect(result.get('p1')!.x).toBe(10);
+    expect(result.get('p1')!.extrapolated).toBeUndefined();
+  });
+
+  it('外推期间新玩家冻结在最新帧位置', () => {
+    const buf = new SnapshotBuffer({ extrapolateMs: 200 });
+    buf.push(snap(1, 1000, [p1(0, 0)]));
+    buf.push(snap(2, 1066, [p1(10, 0), { id: 'p2', x: 100, y: 0, z: 0, yaw: 0, pitch: 0, health: 80, alive: true }]));
+    const result = buf.interpolate(1166)!;
+    expect(result.get('p1')!.extrapolated).toBe(true);
+    expect(result.get('p2')!.x).toBe(100);
+    expect(result.get('p2')!.extrapolated).toBe(false);
+  });
 });
