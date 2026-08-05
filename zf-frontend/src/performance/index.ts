@@ -6,5 +6,7 @@ export type { PerformanceBudget, RendererStats } from './PerformanceBudget';
 export { PerformanceOptimizer } from './PerformanceOptimizer';
 export { FrameBudget, FRAME_BUDGET_TABLE } from './FrameBudget';
 export type { FrameBudgetSectionId, FrameBudgetSectionDef, FrameBudgetSectionStats } from './FrameBudget';
+export { LongTaskMonitor } from './LongTaskMonitor';
+export type { LongTaskStats, LongTaskObserverLike, LongTaskMonitorOptions } from './LongTaskMonitor';
 export { DynamicResolution, DEFAULT_DYNAMIC_RESOLUTION_OPTIONS } from './DynamicResolution';
 export type { DynamicResolutionOptions } from './DynamicResolution';

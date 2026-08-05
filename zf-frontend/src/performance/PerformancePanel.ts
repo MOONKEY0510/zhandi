@@ -1,5 +1,6 @@
 import type { PerformanceMonitor, PerformanceSnapshot } from './PerformanceMonitor';
 import type { FrameBudgetSectionStats } from './FrameBudget';
+import type { LongTaskStats } from './LongTaskMonitor';
 
 /** 阶段 6 预算统计：音频 voice 与特效池的实时占用 */
 export interface PerformanceExtras {
@@ -8,6 +9,8 @@ export interface PerformanceExtras {
   vfxActive: number;
   /** 阶段 9：CPU 各阶段帧预算（超平均预算用 ▲ 标记） */
   frameBudget?: FrameBudgetSectionStats[];
+  /** 阶段 9：长任务/GC 大暂停观测 */
+  longTask?: LongTaskStats;
 }
 
 export class PerformancePanel {
@@ -17,6 +20,8 @@ export class PerformancePanel {
   private visible = false;
   /** 最近一帧的帧预算数据（阶段 9：随导出 JSON 一并落盘，保证“有预算、有数据”完整） */
   private lastFrameBudget: FrameBudgetSectionStats[] | null = null;
+  /** 最近的长任务统计（阶段 9：随导出 JSON 落盘） */
+  private lastLongTask: LongTaskStats | null = null;
 
   constructor(private readonly monitor: PerformanceMonitor) {
     this.container = document.createElement('div');
@@ -73,6 +78,7 @@ export class PerformancePanel {
   update(snapshot: PerformanceSnapshot, benchmarkEnabled: boolean, extras?: PerformanceExtras): void {
     if (!this.visible) return;
     this.lastFrameBudget = extras?.frameBudget ?? null;
+    this.lastLongTask = extras?.longTask ?? null;
 
     const lines = [
       `MODE   ${benchmarkEnabled ? 'BENCHMARK' : 'GAME'}`,
@@ -99,6 +105,11 @@ export class PerformancePanel {
           );
         }
       }
+      if (extras.longTask) {
+        lines.push(
+          `LONG    ${extras.longTask.count} (max ${extras.longTask.maxMs.toFixed(0)}ms, last ${extras.longTask.lastMs.toFixed(0)}ms)`,
+        );
+      }
     }
     this.values.textContent = lines.join('\n');
   }
@@ -117,8 +128,9 @@ export class PerformancePanel {
 
   private readonly exportReport = (): void => {
     const base = this.monitor.exportReport();
+    const withBudget = this.lastFrameBudget ? { ...base, frameBudget: this.lastFrameBudget } : base;
     const report = JSON.stringify(
-      this.lastFrameBudget ? { ...base, frameBudget: this.lastFrameBudget } : base,
+      this.lastLongTask ? { ...withBudget, longTask: this.lastLongTask } : withBudget,
       null,
       2,
     );

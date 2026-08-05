@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { loadGameSettings, resolveGameConfig, saveGameSettings, validateGameConfig } from '../config';
 import { EventBus, FixedStepClock, GameState, GameStateMachine } from '../core';
 import { gameplayRandom, useGameplaySeed, useSystemRandom } from '../core/Random';
-import { PerformanceMonitor, PerformancePanel, FrameBudget } from '../performance';
+import { PerformanceMonitor, PerformancePanel, FrameBudget, LongTaskMonitor } from '../performance';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
@@ -115,6 +115,8 @@ export class GameScene {
   private readonly performancePanel: PerformancePanel;
   /** 阶段 9：CPU 各阶段帧预算采集（主循环埋点，互斥分段测量） */
   private readonly frameBudget = new FrameBudget();
+  /** 阶段 9：长任务/GC 大暂停观测（PerformanceObserver longtask） */
+  private readonly longTaskMonitor = new LongTaskMonitor();
   private lastPerformanceCapture = 0;
   /** 小地图敌人降频（200ms 一次 filter/map，避免每帧分配 bots 数组） */
   private lastMinimapEnemiesUpdate = 0;
@@ -422,6 +424,9 @@ export class GameScene {
   }
 
   private async initializeGameWorld(): Promise<void> {
+    // 长任务/GC 观测（阶段 9）：进入游戏世界即开始监听
+    this.longTaskMonitor.start();
+
     // 物理
     this.physicsWorld = await PhysicsWorld.init();
     this.physicsWorld.createGround(120);
@@ -2862,6 +2867,7 @@ export class GameScene {
         voicesVirtual: voiceStats.virtual,
         vfxActive: this.vfxPool.getActiveCount(),
         frameBudget: this.frameBudget.allStats(),
+        longTask: this.longTaskMonitor.getStats(),
       });
       this.lastPerformanceCapture = time;
     }
@@ -2886,6 +2892,7 @@ export class GameScene {
     if (!this.stateMachine.is(GameState.DISPOSED)) {
       this.stateMachine.transition(GameState.DISPOSED);
     }
+    this.longTaskMonitor.stop();
     cancelAnimationFrame(this.animationId);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
