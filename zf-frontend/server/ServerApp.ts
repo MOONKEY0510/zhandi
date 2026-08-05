@@ -387,13 +387,15 @@ export class ServerApp {
           observerZ: observer.z,
           players: all,
         });
-        // 观察者本人附加 ackSeq（服务端已确认的最高输入 seq，客户端预测校正基准）
+        // 观察者本人附加 ackSeq（服务端已确认并应用的最高输入 seq，客户端预测校正基准）。
+        // 注意用 lastAppliedSeq 而非 lastSeq：乱序缓冲中尚未应用的输入不能被 ack，
+        // 否则客户端会丢弃未确认输入，硬校正重放时状态偏差。
         const snapshot: Snapshot = {
           kind: 'snapshot',
           tick,
           serverTime: this.clock.nowMs(),
           players: visible.map((p) =>
-            p.id === conn.playerId && conn.lastSeq >= 0 ? { ...p, ackSeq: conn.lastSeq } : p,
+            p.id === conn.playerId && conn.lastAppliedSeq >= 0 ? { ...p, ackSeq: conn.lastAppliedSeq } : p,
           ),
         };
         this.send(conn.ws, snapshot);

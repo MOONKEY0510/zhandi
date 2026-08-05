@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebSocket } from 'ws';
 import { ServerApp } from './ServerApp.ts';
 import { NetClient, type RawTransport, type NetClientOptions } from '../src/network/NetClient.ts';
+import { ClientPrediction } from '../src/network/ClientPrediction.ts';
 import { NetSimulator } from '../src/network/NetSimulator.ts';
 import type { JoinAck } from '../shared/protocol.ts';
 
@@ -192,5 +193,33 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
     expect(stats.rttMs!).toBeGreaterThanOrEqual(40);
     expect(stats.snapshotsReceived).toBeGreaterThan(0);
     sim.dispose();
+  }, 15000);
+
+  it('快照 ackSeq 生效：服务端确认并应用输入后，客户端预测缓冲被清理', async () => {
+    // A 挂本地预测（初始 = 队 0 出生点 (-20,-20)）
+    const prediction = new ClientPrediction({ x: -20, y: 0, z: -20, yaw: 0, pitch: 0, health: 100, alive: true });
+    const a = makeClient('a5', { prediction, pingIntervalMs: 0 });
+    const ackedCounts: number[] = [];
+    a.onPredictionReconcile = (r) => ackedCounts.push(r.acked);
+
+    await a.connect();
+    a.joinRoom('netplay');
+    await sleep(250);
+
+    // 以 ~60Hz 发送 20 个前进输入（预测缓冲随发送累积；期间快照已开始 ack 部分输入）
+    for (let i = 0; i < 20; i += 1) {
+      a.sendInput({ ...IDLE_INPUT, moveForward: true });
+      await sleep(16);
+    }
+    expect(prediction.pendingInputs.length).toBeGreaterThan(0); // 预测已挂载并推进
+
+    // 等服务端应用全部输入 → 快照携带 lastAppliedSeq → 客户端 reconcile 按 ackSeq 清理缓冲
+    await sleep(800);
+
+    expect(prediction.pendingInputs.length).toBe(0); // 全部输入已被 ack 丢弃
+    expect(ackedCounts.some((n) => n > 0)).toBe(true); // 至少一次快照确认了输入
+    // 预测位移 ≈ 服务端同模型推进（20 × 16ms × 5.2m/s ≈ 1.7m），未被硬校正（无碰撞模型偏差）
+    const final = prediction.state;
+    expect(Math.hypot(final.x - -20, final.z - -20)).toBeGreaterThan(1);
   }, 15000);
 });
