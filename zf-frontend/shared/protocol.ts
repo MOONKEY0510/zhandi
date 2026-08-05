@@ -38,6 +38,10 @@ export const BULLET_HIT_RADIUS = 0.6 as const;
 export const BULLET_HEIGHT_HALF = 1.2 as const;
 export const BULLET_MAX_RANGE = 200 as const;
 export const BULLET_LIFE_MS = 4000 as const;
+/** 服务端权威重生延迟（ms）：玩家死亡后经此延迟自动在队伍出生点复活 */
+export const RESPAWN_DELAY_MS = 3000 as const;
+/** 回合结束到自动开新回合的间隔（ms） */
+export const ROUND_RESTART_DELAY_MS = 5000 as const;
 
 export type MessageKind =
   | 'hello'
@@ -54,6 +58,7 @@ export type MessageKind =
   | 'vehicle_exit'
   | 'vehicle_drive'
   | 'vehicle_fire'
+  | 'kill_feed'
   | 'ping'
   | 'pong'
   | 'error';
@@ -320,6 +325,18 @@ export interface PlayerLeave {
   reason: 'left' | 'timeout' | 'kicked';
 }
 
+/** 击杀事件（服务端权威：命中裁决死亡后立即广播，客户端击杀消息/音效即时反馈） */
+export interface KillFeedMsg {
+  kind: 'kill_feed';
+  /** 击杀者 playerId（环境击杀为 null，如坠落/自伤） */
+  killerId: string | null;
+  killerName: string;
+  victimId: string;
+  victimName: string;
+  /** 武器显示名（步枪/机枪/主炮） */
+  weaponLabel: string;
+}
+
 export interface Ping {
   kind: 'ping';
   clientTime: number;
@@ -352,6 +369,7 @@ export type NetworkMessage =
   | VehicleExit
   | VehicleDrive
   | VehicleFire
+  | KillFeedMsg
   | Ping
   | Pong
   | ErrorMsg;

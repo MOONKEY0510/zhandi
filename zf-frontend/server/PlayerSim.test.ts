@@ -63,21 +63,24 @@ describe('PlayerSim（阶段 8 权威移动模拟）', () => {
 
   it('死亡后不响应输入', () => {
     const sim = new PlayerSim('p1', 0, spawn);
-    expect(sim.takeDamage(100)).toBe(true);
+    expect(sim.takeDamage(100, 5000)).toBe(true);
     expect(sim.state.alive).toBe(false);
+    // 死亡时刻登记（重生计时基准）
+    expect(sim.state.deathTimeMs).toBe(5000);
     const result = sim.step(input({ moveForward: true, fire: true }), 1, 0);
     expect(result.fired).toBe(false);
     expect(sim.state.x).toBe(0);
   });
 
-  it('重生复位血量与位置', () => {
+  it('重生复位血量、位置与死亡时刻', () => {
     const sim = new PlayerSim('p1', 0, spawn);
-    sim.takeDamage(60);
+    sim.takeDamage(60, 1000);
     sim.respawn(10, 20);
     expect(sim.state.alive).toBe(true);
     expect(sim.state.health).toBe(100);
     expect(sim.state.x).toBe(10);
     expect(sim.state.z).toBe(20);
+    expect(sim.state.deathTimeMs).toBe(0);
   });
 
   it('toSnapshot 输出快照字段', () => {

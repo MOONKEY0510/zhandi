@@ -24,6 +24,8 @@ export interface PlayerSimState {
   alive: boolean;
   /** 服务端记录的最后一次开火时间（ms，射速裁决） */
   lastFireServerMs: number;
+  /** 死亡时刻（ms，重生计时基准；alive 时无意义） */
+  deathTimeMs: number;
 }
 
 export interface PlayerSimInput {
@@ -63,6 +65,7 @@ export class PlayerSim {
       health: PLAYER_MAX_HEALTH,
       alive: true,
       lastFireServerMs: Number.NEGATIVE_INFINITY,
+      deathTimeMs: 0,
     };
   }
 
@@ -122,12 +125,13 @@ export class PlayerSim {
     return { fired, corrected };
   }
 
-  takeDamage(amount: number): boolean {
+  takeDamage(amount: number, nowMs = 0): boolean {
     const s = this.state;
     if (!s.alive) return false;
     s.health = Math.max(0, s.health - amount);
     if (s.health <= 0) {
       s.alive = false;
+      s.deathTimeMs = nowMs;
       return true;
     }
     return false;
@@ -139,6 +143,7 @@ export class PlayerSim {
     s.z = z;
     s.health = PLAYER_MAX_HEALTH;
     s.alive = true;
+    s.deathTimeMs = 0;
   }
 
   toSnapshot(): { id: string; x: number; y: number; z: number; yaw: number; pitch: number; health: number; alive: boolean } {

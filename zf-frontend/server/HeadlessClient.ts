@@ -108,9 +108,10 @@ export class HeadlessClient {
       await new Promise((r) => setTimeout(r, 50));
     }
     this.client.joinRoom(this.opts.roomId ?? 'load');
-    // 等待 join_ack（双向网络模拟下握手+加入需 200ms+；丢包有 join 重试兜底）
+    // 等待 join_ack（双向网络模拟下握手+加入需 200ms+；丢包有 join 重试兜底）。
+    // 注意不能用 stats.roomId：joinRoom() 调用时即赋值，join 被丢包时输入会抢跑触发 not_joined。
     const deadline = Date.now() + 8000;
-    while (this.client.getStats().roomId === null && Date.now() < deadline) {
+    while (!this.joined && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
     const rate = this.opts.inputRateHz ?? 30;

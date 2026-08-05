@@ -12,6 +12,7 @@ import {
   type JoinAck,
   type ServerGameState,
   type VehicleStateMsg,
+  type KillFeedMsg,
 } from '../../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../../shared/codec.ts';
 import { TICK_RATE_HZ } from '../../shared/protocol.ts';
@@ -135,6 +136,8 @@ export class NetClient {
   onJoinAck: ((ack: JoinAck) => void) | null = null;
   onGameState: ((state: ServerGameState) => void) | null = null;
   onVehicleState: ((state: VehicleStateMsg) => void) | null = null;
+  /** 击杀事件（服务端权威：命中裁决死亡后广播） */
+  onKillFeed: ((msg: KillFeedMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 房间内玩家离开（超时清理/主动退出），用于移除远端实体 */
@@ -404,6 +407,9 @@ export class NetClient {
         break;
       case 'vehicle_state':
         this.onVehicleState?.(msg);
+        break;
+      case 'kill_feed':
+        this.onKillFeed?.(msg);
         break;
       case 'snapshot': {
         this.snapshotsReceived += 1;

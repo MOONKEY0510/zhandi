@@ -37,6 +37,8 @@ export interface ServerProjectile {
   vy: number;
   vz: number;
   damage: number;
+  /** 武器显示名（击杀事件用：步枪/机枪/主炮） */
+  label: string;
   traveled: number;
   maxRange: number;
   lifeMs: number;
@@ -47,6 +49,8 @@ export interface ProjectileHit {
   ownerId: string;
   targetId: string;
   damage: number;
+  /** 武器显示名（击杀事件用） */
+  label: string;
   x: number;
   y: number;
   z: number;
@@ -70,6 +74,8 @@ export interface SpawnProjectileInput {
   damage?: number;
   maxRange?: number;
   lifeMs?: number;
+  /** 武器显示名（击杀事件用，默认「步枪」） */
+  label?: string;
 }
 
 export class ProjectileSim {
@@ -92,6 +98,7 @@ export class ProjectileSim {
       vy: Math.sin(input.pitch) * speed,
       vz: -Math.cos(input.yaw) * cosPitch * speed,
       damage: input.damage ?? BULLET_DAMAGE,
+      label: input.label ?? '步枪',
       traveled: 0,
       maxRange: input.maxRange ?? BULLET_MAX_RANGE,
       lifeMs: input.lifeMs ?? BULLET_LIFE_MS,
@@ -143,6 +150,7 @@ export class ProjectileSim {
               ownerId: p.ownerId,
               targetId: t.id,
               damage: p.damage,
+              label: p.label,
               x: p.x,
               y: p.y,
               z: p.z,

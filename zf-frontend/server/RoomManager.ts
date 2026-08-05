@@ -49,6 +49,8 @@ export class Room {
   conquest: ConquestSim | null = null;
   /** 服务端权威载具模拟（首个玩家加入时由 ServerApp 创建） */
   vehicles: VehicleSim | null = null;
+  /** 回合结束时刻（ms）：phase='ended' 时经 ROUND_RESTART_DELAY_MS 自动开新回合（null = 无重启计划） */
+  roundEndAtMs: number | null = null;
   /** 单调递增的槽位计数器 */
   private nextSlot = 0;
 

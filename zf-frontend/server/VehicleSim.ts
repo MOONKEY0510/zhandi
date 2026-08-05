@@ -48,6 +48,8 @@ export interface VehicleFireResult {
   speedMps: number;
   maxRange: number;
   lifeMs: number;
+  /** 武器类型（击杀事件显示名映射用：mg → 机枪，cannon → 主炮） */
+  weaponKind: 'mg' | 'cannon';
   /** 弹丸起点（载具位置 + 炮口高度） */
   x: number;
   y: number;
@@ -188,6 +190,7 @@ export class VehicleSim {
       speedMps: weapon.speedMps,
       maxRange: weapon.maxRange,
       lifeMs: weapon.lifeMs,
+      weaponKind: weapon.kind,
       x: v.x,
       y: 0.8,
       z: v.z,

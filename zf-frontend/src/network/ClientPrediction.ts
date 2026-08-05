@@ -135,7 +135,11 @@ export class ClientPrediction {
       return { errorMeters: error, snapped: true, replayed, acked };
     }
 
-    // 小误差：渲染状态向服务端权威位置平滑收敛（误差回收），不打断本地手感
+    // 小误差：渲染状态向服务端权威位置平滑收敛（误差回收），不打断本地手感。
+    // 血量/存活不参与预测（仅由服务端裁决），平滑路径同样回写权威值——
+    // 死亡/重生检测读 prediction.state 必须始终反映服务端裁决。
+    this._state.health = server.health;
+    this._state.alive = server.alive;
     const k = this.opts.smoothing;
     this._renderState = {
       x: lerp(this._renderState.x, server.x, k),

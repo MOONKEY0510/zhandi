@@ -245,4 +245,57 @@ describe('NetworkGameClient（阶段 8 第九批：GameScene 网络桥接层）'
     expect(msg.kind).toBe('vehicle_exit');
     bridge.disconnect();
   });
+
+  it('kill_feed 透传：onKillFeed 收到服务端击杀事件（GameScene 击杀消息/K-D 依据）', async () => {
+    const { bridge, transport } = await setupBridge();
+    const feeds: unknown[] = [];
+    bridge.onKillFeed = (f) => feeds.push(f);
+    transport.inject({
+      kind: 'kill_feed',
+      killerId: 'p9',
+      killerName: '苏军士兵',
+      victimId: 'p1',
+      victimName: '德军士兵',
+      weaponLabel: '步枪',
+    });
+    expect(feeds).toHaveLength(1);
+    const f = feeds[0] as { kind: string; killerId: string; victimId: string; weaponLabel: string };
+    expect(f.kind).toBe('kill_feed');
+    expect(f.killerId).toBe('p9');
+    expect(f.victimId).toBe('p1');
+    expect(f.weaponLabel).toBe('步枪');
+    bridge.disconnect();
+  });
+
+  it('getOwnState：快照校正后返回服务端权威本人状态（health/alive 驱动死亡/重生表现）', async () => {
+    const transport = new FakeTransport();
+    const prediction = new ClientPrediction({
+      x: 0, y: 0, z: 0, yaw: 0, pitch: 0, health: 100, alive: true,
+    });
+    const bridge = new NetworkGameClient();
+    await bridge.connect('ws://fake', 'r1', 'p1', '玩家一', {
+      pingIntervalMs: 0,
+      transportFactory: () => transport,
+      prediction,
+    });
+    transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+
+    // 服务端裁决：本人掉血（未死）
+    transport.inject(snapshot(1, 1000, [
+      { id: 'p1', x: 1, y: 0, z: 2, yaw: 0.1, pitch: 0, health: 42, alive: true },
+    ]));
+    let own = bridge.getOwnState();
+    expect(own).not.toBeNull();
+    expect(own!.health).toBeCloseTo(42, 5);
+    expect(own!.alive).toBe(true);
+
+    // 服务端裁决：死亡（alive=false → GameScene 死亡表现）
+    transport.inject(snapshot(2, 1066, [
+      { id: 'p1', x: 1, y: 0, z: 2, yaw: 0.1, pitch: 0, health: 0, alive: false },
+    ]));
+    own = bridge.getOwnState();
+    expect(own!.alive).toBe(false);
+    expect(own!.health).toBe(0);
+    bridge.disconnect();
+  });
 });

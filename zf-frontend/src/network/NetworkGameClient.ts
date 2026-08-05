@@ -9,11 +9,11 @@
  */
 
 import { NetClient, type NetClientStats, type RawTransport } from './NetClient.ts';
-import type { PlayerInput, ServerGameState, VehicleStateMsg } from '../../shared/protocol.ts';
+import type { PlayerInput, ServerGameState, VehicleStateMsg, KillFeedMsg } from '../../shared/protocol.ts';
 import type { InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { RemotePlayerView } from './RemotePlayerView.ts';
 import type { NetSimulator } from './NetSimulator.ts';
-import type { ClientPrediction } from './ClientPrediction.ts';
+import type { ClientPrediction, PredictedPlayerState } from './ClientPrediction.ts';
 
 /** 客户端输入子集：与 PlayerInput 一致但省略协议字段（seq/clientTick 由 NetClient 填充） */
 export type ClientInput = Omit<PlayerInput, 'kind' | 'seq' | 'clientTick'>;
@@ -37,6 +37,7 @@ export interface NetworkGameClientOptions {
 export class NetworkGameClient {
   private client: NetClient | null = null;
   private ownId = '';
+  private prediction: ClientPrediction | null = null;
 
   /** 远端玩家渲染视图（已排除本地玩家） */
   readonly remotePlayers = new RemotePlayerView();
@@ -46,6 +47,7 @@ export class NetworkGameClient {
   onRoomState: ((state: { roomId: string; phase: string; players: unknown[] }) => void) | null = null;
   onGameState: ((state: ServerGameState) => void) | null = null;
   onVehicleState: ((state: VehicleStateMsg) => void) | null = null;
+  onKillFeed: ((msg: KillFeedMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
@@ -60,6 +62,7 @@ export class NetworkGameClient {
     options: NetworkGameClientOptions = {},
   ): Promise<void> {
     this.ownId = playerId;
+    this.prediction = options.prediction ?? null;
     this.client = new NetClient(url, playerId, displayName, {
       maxReconnects: options.maxReconnects,
       pingIntervalMs: options.pingIntervalMs,
@@ -84,6 +87,7 @@ export class NetworkGameClient {
       this.onRoomState?.({ roomId: state.roomId, phase: state.phase, players: state.players });
     this.client.onGameState = (state) => this.onGameState?.(state);
     this.client.onVehicleState = (state) => this.onVehicleState?.(state);
+    this.client.onKillFeed = (msg) => this.onKillFeed?.(msg);
     this.client.onError = (code, message) => this.onError?.(code, message);
     this.client.onDisconnect = (reason) => this.onDisconnect?.(reason);
     this.client.onPredictionReconcile = (result) => this.onPredictionReconcile?.(result);
@@ -119,6 +123,11 @@ export class NetworkGameClient {
 
   getStats(): NetClientStats | null {
     return this.client?.getStats() ?? null;
+  }
+
+  /** 本人权威状态（快照校正后的预测状态：health/alive/位置均为服务端裁决值；未连接为 null） */
+  getOwnState(): PredictedPlayerState | null {
+    return this.prediction?.state ?? null;
   }
 
   get isConnected(): boolean {

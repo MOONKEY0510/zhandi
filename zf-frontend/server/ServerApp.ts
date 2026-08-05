@@ -12,17 +12,20 @@ import {
   INPUT_RATE_LIMIT_PER_SECOND,
   INPUT_BUFFER_WINDOW,
   PLAYER_EYE_HEIGHT,
+  RESPAWN_DELAY_MS,
+  ROUND_RESTART_DELAY_MS,
   type NetworkMessage,
   type PlayerInput,
   type JoinAck,
   type Snapshot,
+  type RoomState,
   type VehicleDrive,
   type VehicleFire,
 } from '../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../shared/codec.ts';
 import { computeVisiblePlayers } from '../shared/interest.ts';
 import { SimClock } from './SimClock.ts';
-import { RoomManager } from './RoomManager.ts';
+import { RoomManager, type Room } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
 import { VehicleSim } from './VehicleSim.ts';
 import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
@@ -39,6 +42,8 @@ export interface ServerAppOptions {
 interface Connection {
   ws: WebSocket;
   playerId: string | null;
+  /** 显示名（击杀事件/计分板用，握手时登记） */
+  displayName: string;
   roomId: string | null;
   sim: PlayerSim | null;
   /** 输入速率限制（滑动窗口） */
@@ -62,6 +67,9 @@ const SPAWN = [
 
 /** 上车半径（米）：与服务端据点捕获半径一致 */
 const VEHICLE_ENTER_RADIUS = 8;
+
+/** 载具武器类型 → 击杀事件显示名 */
+const VEHICLE_WEAPON_LABELS: Record<'mg' | 'cannon', string> = { mg: '机枪', cannon: '主炮' };
 
 export class ServerApp {
   readonly roomManager = new RoomManager();
@@ -127,6 +135,7 @@ export class ServerApp {
     const conn: Connection = {
       ws,
       playerId: null,
+      displayName: '',
       roomId: null,
       sim: null,
       inputTimes: [],
@@ -175,6 +184,7 @@ export class ServerApp {
           return;
         }
         conn.playerId = msg.playerId;
+        conn.displayName = msg.displayName;
         this.send(conn.ws, { kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: this.clock.tick });
         return;
       }
@@ -209,15 +219,7 @@ export class ServerApp {
           resumed: result.resumed,
         };
         this.send(conn.ws, ack);
-        this.send(conn.ws, {
-          kind: 'room_state',
-          roomId: room.id,
-          phase: room.phaseLabel,
-          map: room.map,
-          tickRate: this.clock.tickRateHz,
-          snapshotRate: this.clock.tickRateHz / this.clock.snapshotEveryTicks,
-          players: room.toRoomState(),
-        });
+        this.send(conn.ws, this.buildRoomState(room));
         return;
       }
 
@@ -352,6 +354,7 @@ export class ServerApp {
       damage: result.damage,
       maxRange: result.maxRange,
       lifeMs: result.lifeMs,
+      label: VEHICLE_WEAPON_LABELS[result.weaponKind],
     });
   }
 
@@ -398,6 +401,20 @@ export class ServerApp {
       }
     }
 
+    // 死亡重生（服务端权威）：死亡计时到期 → 队伍出生点复活（下一周期快照反映）。
+    // 仅在 started 阶段生效：结算期（ended）保持阵亡，由 restartRound 统一复活。
+    for (const conn of this.connections.values()) {
+      if (!conn.sim || conn.sim.state.alive) continue;
+      const room = conn.roomId ? this.roomManager.getRoom(conn.roomId) : null;
+      if (!room || room.phase !== 'started') continue;
+      if (this.clock.nowMs() - conn.sim.state.deathTimeMs >= RESPAWN_DELAY_MS) {
+        const s = conn.sim.state;
+        const spawn = SPAWN[s.team];
+        conn.sim.respawn(spawn.x, spawn.z);
+        conn.vehicleDrive = null;
+      }
+    }
+
     // 弹道推进 + 命中裁决（伤害由服务器裁决，客户端无法伪造击杀）
     const targets: ProjectileTarget[] = [];
     for (const conn of this.connections.values()) {
@@ -432,11 +449,21 @@ export class ServerApp {
       const targetConn = this.findConnection(hit.targetId);
       if (targetConn?.sim) {
         const wasAlive = targetConn.sim.state.alive;
-        targetConn.sim.takeDamage(hit.damage);
-        // 死亡翻转：服务端权威扣兵力 + 记击杀（客户端无法伪造）
+        targetConn.sim.takeDamage(hit.damage, this.clock.nowMs());
+        // 死亡翻转：广播击杀事件（kill_feed 即时反馈）+ 服务端权威扣兵力/记击杀
         if (wasAlive && !targetConn.sim.state.alive) {
           const room = targetConn.roomId ? this.roomManager.getRoom(targetConn.roomId) : null;
           const shooterConn = this.findConnection(hit.ownerId);
+          if (room) {
+            this.broadcastToRoom(room.id, {
+              kind: 'kill_feed',
+              killerId: hit.ownerId,
+              killerName: shooterConn?.displayName || '未知',
+              victimId: hit.targetId,
+              victimName: targetConn.displayName || hit.targetId,
+              weaponLabel: hit.label,
+            });
+          }
           if (room?.conquest && shooterConn?.sim) {
             room.conquest.onPlayerKilled(targetConn.sim.state.team, shooterConn.sim.state.team);
           }
@@ -456,7 +483,11 @@ export class ServerApp {
         }
       }
       room.conquest.update(deltaSeconds, refs);
-      if (room.conquest.winner !== null) room.end();
+      if (room.conquest.winner !== null) {
+        // 回合结束：进入结算期，经 ROUND_RESTART_DELAY_MS 自动开新回合
+        room.end();
+        room.roundEndAtMs = this.clock.nowMs() + ROUND_RESTART_DELAY_MS;
+      }
     }
 
     // 载具推进（服务端权威：驾驶输入应用到司机所在载具，空车惯性减速，摧毁重生）
@@ -469,6 +500,13 @@ export class ServerApp {
         if (v) room.vehicles.drive(v.id, c.vehicleDrive.forward, c.vehicleDrive.turn, deltaSeconds);
       }
       room.vehicles.update(deltaSeconds);
+    }
+
+    // 回合重启（服务端权威）：结算期结束 → 重置征服/载具/全部玩家重生 → 广播新回合状态
+    for (const room of this.roomManager.listRooms()) {
+      if (room.phase === 'ended' && room.roundEndAtMs !== null && this.clock.nowMs() >= room.roundEndAtMs) {
+        this.restartRound(room);
+      }
     }
 
     if (shouldSnapshot) {
@@ -532,6 +570,40 @@ export class ServerApp {
     for (const room of this.roomManager.listRooms()) {
       if (!room.vehicles || room.players.length === 0) continue;
       this.broadcastToRoom(room.id, room.vehicles.getState(tick, room.id));
+    }
+  }
+
+  /** 组装房间状态消息（join 应答与回合重启广播共用） */
+  private buildRoomState(room: Room): RoomState {
+    return {
+      kind: 'room_state',
+      roomId: room.id,
+      phase: room.phaseLabel,
+      map: room.map,
+      tickRate: this.clock.tickRateHz,
+      snapshotRate: this.clock.tickRateHz / this.clock.snapshotEveryTicks,
+      players: room.toRoomState(),
+    };
+  }
+
+  /** 新回合：重置征服/载具权威模拟 + 全员队伍出生点复活 + 立即广播 room_state/game_state */
+  private restartRound(room: Room): void {
+    room.conquest = new ConquestSim();
+    room.vehicles = new VehicleSim();
+    room.phase = 'started';
+    room.roundEndAtMs = null;
+    for (const p of room.players) {
+      const c = this.findConnection(p.id);
+      if (c?.sim) {
+        const s = c.sim.state;
+        const spawn = SPAWN[s.team];
+        c.sim.respawn(spawn.x, spawn.z);
+        c.vehicleDrive = null;
+      }
+    }
+    this.broadcastToRoom(room.id, this.buildRoomState(room));
+    if (room.conquest) {
+      this.broadcastToRoom(room.id, room.conquest.getState(room.id, room.phaseLabel, this.clock.tick, this.clock.nowMs()));
     }
   }
 

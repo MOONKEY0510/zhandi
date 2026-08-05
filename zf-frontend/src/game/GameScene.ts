@@ -26,7 +26,7 @@ import { AISystem, AIBot } from '../ai/AIBot';
 import { AIStats } from '../ai/AIStats';
 import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { NetworkVehicles } from '../vehicle/NetworkVehicles';
-import { VEHICLE_SIM_CONFIGS } from '../../shared/protocol';
+import { VEHICLE_SIM_CONFIGS, RESPAWN_DELAY_MS, ROUND_RESTART_DELAY_MS } from '../../shared/protocol';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
@@ -120,6 +120,14 @@ export class GameScene {
   private networkGameClient: NetworkGameClient | null = null;
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
+  /** 联网模式本人存活状态（服务端快照驱动；死亡表现/重生传送/输入门控用） */
+  private networkAlive = true;
+  /** 联网模式本人死亡时刻（客户端渲染时钟，重生倒计时基准） */
+  private networkDeadSince = 0;
+  /** 回合结束结算遮罩（联网模式：胜者 + 新回合倒计时） */
+  private roundOverlay: HTMLElement | null = null;
+  /** 新回合开始的客户端时间戳（结算倒计时基准；0 = 无进行中的结算） */
+  private roundEndAt = 0;
   /**
    * 本地预测（联网模式）：输入发送时自动推进、快照按 ackSeq 校正；
    * 每帧把本地玩家渲染位置向预测轨迹平滑收敛（服务端权威移动，无碰撞模型的水平偏差由校正吸收）。
@@ -311,6 +319,7 @@ export class GameScene {
 
     this.setupLights();
     this.setupDeathOverlay();
+    this.setupRoundOverlay();
 
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -752,6 +761,25 @@ export class GameScene {
     this.deathOverlay = overlay;
   }
 
+  private setupRoundOverlay(): void {
+    const overlay = document.createElement('div');
+    overlay.id = 'round-overlay';
+    overlay.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.55); z-index: 210;
+      display: none; align-items: center; justify-content: center;
+      pointer-events: none; font-family: 'Arial', sans-serif;
+    `;
+    overlay.innerHTML = `
+      <div style="text-align: center; color: white;">
+        <div id="round-winner" style="font-size: 52px; font-weight: bold; text-shadow: 2px 2px 8px rgba(0,0,0,0.9);"></div>
+        <div id="round-timer" style="font-size: 24px; margin-top: 18px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this.roundOverlay = overlay;
+  }
+
   private setupSpawnPoints(): void {
     // 使用阵营出生点
     const spawnPoint = this.conquestMode.getPlayerSpawnPoint();
@@ -919,8 +947,15 @@ export class GameScene {
   async connectToServer(wsUrl: string, playerId: string): Promise<void> {
     this.networkGameClient = new NetworkGameClient();
     this.networkGameClient.onPlayerLeave = (id) => this.removeRemotePlayer(id);
+    this.networkGameClient.onKillFeed = (msg) => {
+      // 击杀反馈：本人击杀/死亡计入 K/D（服务端权威），其余玩家消息进 HUD 击杀列表
+      if (msg.victimId === playerId) this.deathCount += 1;
+      if (msg.killerId === playerId) this.killCount += 1;
+      this.hud?.addKillMessage(`${msg.killerName} 击杀了 ${msg.victimName}（${msg.weaponLabel}）`, this.simulationTimeMs);
+    };
     this.networkGameClient.onGameState = (state) => {
       this.serverGameState = state;
+      this.handleNetworkRoundState(state);
     };
     // 联网载具视觉：服务端权威 vehicle_state（15Hz）驱动创建/更新/移除
     this.networkVehicles = new NetworkVehicles(this.scene);
@@ -941,6 +976,60 @@ export class GameScene {
     await this.networkGameClient.connect(wsUrl, this.config.network.roomId, playerId, '玩家', {
       prediction: this.clientPrediction,
     });
+  }
+
+  /** 联网回合状态：胜者出现 → 结算遮罩 + 新回合倒计时；新回合开始 → 关闭遮罩 */
+  private handleNetworkRoundState(state: ServerGameState): void {
+    if (state.winner !== null && this.roundEndAt === 0) {
+      this.roundEndAt = this.simulationTimeMs + ROUND_RESTART_DELAY_MS;
+      const winnerName = state.winner === 0 ? '德军' : '苏军';
+      this.showRoundOverlay(`${winnerName} 获胜！`);
+    } else if (state.winner === null && state.phase === 'started') {
+      this.roundEndAt = 0;
+      if (this.roundOverlay) this.roundOverlay.style.display = 'none';
+    }
+  }
+
+  /** 结算遮罩（胜者文本 + 新回合倒计时） */
+  private showRoundOverlay(winnerText: string): void {
+    if (!this.roundOverlay) return;
+    const winnerEl = this.roundOverlay.querySelector('#round-winner');
+    if (winnerEl) winnerEl.textContent = winnerText;
+    this.roundOverlay.style.display = 'flex';
+  }
+
+  /**
+   * 联网死亡/重生生命周期（服务端权威）：
+   * 快照校正后的本人 alive 翻转 → 死亡遮罩/重生传送；死亡中刷新倒计时。
+   */
+  private updateNetworkLifecycle(time: number): void {
+    const client = this.networkGameClient;
+    const own = client?.getOwnState();
+    if (!client || !own) return;
+
+    if (!own.alive && this.networkAlive) {
+      // 死亡翻转：复用单机死亡表现（遮罩/音效/事件），本地玩家停摆
+      this.networkAlive = false;
+      this.networkDeadSince = time;
+      this.audioSystem.play(SoundType.DEATH, this.camera.position);
+      this.events.emit('player:death', { team: this.conquestMode.playerTeam, time });
+      if (this.deathOverlay) this.deathOverlay.style.display = 'flex';
+    }
+    if (own.alive && !this.networkAlive) {
+      // 服务端复活：传送到权威出生点（快照已硬校正到该位置），关闭死亡遮罩
+      this.networkAlive = true;
+      if (this.player) {
+        this.physicsWorld.setBodyPosition('player', { x: own.x, y: own.y, z: own.z });
+        this.physicsWorld.setBodyLinearVelocity('player', { x: 0, y: 0, z: 0 });
+        this.player.resetFallState();
+      }
+      if (this.deathOverlay) this.deathOverlay.style.display = 'none';
+    }
+    if (!own.alive && this.deathOverlay) {
+      const remaining = Math.max(0, Math.ceil((RESPAWN_DELAY_MS - (time - this.networkDeadSince)) / 1000));
+      const el = this.deathOverlay.querySelector('#respawn-timer');
+      if (el) el.textContent = `${remaining} 秒后重生...`;
+    }
   }
 
   /** 每帧将远端玩家快照插值姿势同步到 mesh（创建/更新/移除，替代旧版直接瞬移） */
@@ -2458,8 +2547,8 @@ export class GameScene {
     this.roundFlow.update(dt);
     if (!this.roundFlow.canSimulateCombat()) return;
 
-    // 玩家更新（联网驾驶时停用本地玩家控制）
-    if (this.player && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle) {
+    // 玩家更新（联网驾驶时停用本地玩家控制；联网死亡时服务端权威停摆）
+    if (this.player && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle && (!this.networkGameClient || this.networkAlive)) {
       this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
     }
     this.pendingMouseMovement.x = 0;
@@ -2467,7 +2556,7 @@ export class GameScene {
 
     // 联网权威回写：本地渲染位置向服务端预测轨迹平滑收敛
     // （水平 x/z；垂直 y 与跳跃/碰撞保留本地物理，服务端移动模型暂无 y 轴与碰撞）
-    if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle) {
+    if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle && (!this.networkGameClient || this.networkAlive)) {
       const rs = this.clientPrediction.renderState;
       const pos = this.player.getPosition();
       if (pos) {
@@ -2580,8 +2669,18 @@ export class GameScene {
     // 音频 voice 预算：真实/虚拟转换与过期清理
     this.updateAudioVoices();
 
+    // 联网死亡/重生生命周期（服务端权威 alive 驱动死亡遮罩/重生传送/倒计时）
+    this.updateNetworkLifecycle(time);
+
+    // 结算遮罩倒计时（联网回合结束 → 新回合）
+    if (this.roundOverlay && this.roundOverlay.style.display !== 'none') {
+      const remaining = Math.max(0, Math.ceil((this.roundEndAt - time) / 1000));
+      const el = this.roundOverlay.querySelector('#round-timer');
+      if (el) el.textContent = `${remaining} 秒后开始新回合...`;
+    }
+
     // 网络：输入序列发送（服务端权威移动裁决，对齐服务器 tick 频率）+ 远端快照插值渲染
-    if (this.networkGameClient && this.player && !this.inNetworkVehicle && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
+    if (this.networkGameClient && this.player && !this.inNetworkVehicle && this.networkAlive && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
       const input = this.inputManager.state;
       const rot = this.player.getRotation();
       this.networkGameClient.sendInput({
@@ -2663,7 +2762,7 @@ export class GameScene {
 
     this.hud.update(
       {
-        health: this.healthSystem.currentHealth, maxHealth: this.healthSystem.maxHealth,
+        health: this.networkGameClient ? (this.networkGameClient.getOwnState()?.health ?? this.healthSystem.currentHealth) : this.healthSystem.currentHealth, maxHealth: this.healthSystem.maxHealth,
         ammo: weapon.currentAmmo, reserveAmmo: weapon.reserveAmmo, weaponName: weapon.config.name,
         killCount: this.killCount, deathCount: this.deathCount,
         isReloading: weapon.isReloading, reloadProgress: weapon.getReloadProgress(time),
