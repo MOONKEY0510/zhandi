@@ -69,6 +69,8 @@ export interface NetClientOptions {
   reconnectBaseDelayMs?: number;
   /** 网络模拟（联调/演示用），包装在真实传输外 */
   simulator?: NetSimulator;
+  /** 自定义传输工厂（测试/同构环境：每次重连新建连接）；默认浏览器 WebSocket（可选模拟器包装） */
+  transportFactory?: () => RawTransport;
   /** ping 周期 ms */
   pingIntervalMs?: number;
   /**
@@ -136,20 +138,22 @@ export class NetClient {
     this.simulator = options.simulator ?? null;
     this.prediction = options.prediction ?? null;
 
-    this.transportFactory = () => {
-      const raw = new WebSocketTransport(url);
-      if (this.simulator) {
-        // 模拟器包装出站方向：客户端发送 → 模拟延迟/丢包 → 真实 WebSocket
-        this.simulator.onReceive = (bytes) => raw.send(bytes);
-        return {
-          send: (bytes) => this.simulator!.send(bytes),
-          onMessage: (cb) => raw.onMessage(cb),
-          onClose: (cb) => raw.onClose(cb),
-          close: () => raw.close(),
-        };
-      }
-      return raw;
-    };
+    this.transportFactory =
+      options.transportFactory ??
+      (() => {
+        const raw = new WebSocketTransport(url);
+        if (this.simulator) {
+          // 模拟器包装出站方向：客户端发送 → 模拟延迟/丢包 → 真实 WebSocket
+          this.simulator.onReceive = (bytes) => raw.send(bytes);
+          return {
+            send: (bytes) => this.simulator!.send(bytes),
+            onMessage: (cb) => raw.onMessage(cb),
+            onClose: (cb) => raw.onClose(cb),
+            close: () => raw.close(),
+          };
+        }
+        return raw;
+      });
     this.transport = this.transportFactory();
   }
 
@@ -226,6 +230,10 @@ export class NetClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.pingTimer) {
+      clearTimeout(this.pingTimer);
+      this.pingTimer = null;
+    }
     this.transport.close();
     this.connected = false;
   }
@@ -259,6 +267,14 @@ export class NetClient {
     const latest = this.snapshotBuffer.getLatest();
     if (!latest) return null;
     return this.snapshotBuffer.interpolate();
+  }
+
+  /**
+   * 模拟传输中断（调试/网络面板）：关闭底层连接但不置 manualClose，
+   * 触发自动重连流程（与真实断线路径一致）。
+   */
+  dropConnection(): void {
+    this.transport.close();
   }
 
   private dispatch(bytes: Uint8Array): void {

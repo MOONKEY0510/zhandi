@@ -61,6 +61,8 @@ export class ServerApp {
   private readonly options: Required<Pick<ServerAppOptions, 'defaultRoomId'>> & ServerAppOptions;
   /** 监控：累计速度修正次数（异常移动检测） */
   private totalCorrections = 0;
+  /** tick 循环定时器（stop 时清除，优雅关闭） */
+  private tickTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ServerAppOptions = {}) {
     this.options = { defaultRoomId: 'lobby-1', ...options };
@@ -96,6 +98,7 @@ export class ServerApp {
   private startTickLoop(): void {
     const tickMs = 1000 / this.clock.tickRateHz;
     const loop = (): void => {
+      if (!this.wss) return; // 已停止：不再推进
       this.clock.step();
       this.options.onStats?.({
         tick: this.clock.tick,
@@ -103,9 +106,9 @@ export class ServerApp {
         players: this.roomManager.stats().players,
         corrections: this.totalCorrections,
       });
-      setTimeout(loop, tickMs);
+      this.tickTimer = setTimeout(loop, tickMs);
     };
-    setTimeout(loop, tickMs);
+    this.tickTimer = setTimeout(loop, tickMs);
   }
 
   private handleConnection(ws: WebSocket): void {
@@ -378,6 +381,10 @@ export class ServerApp {
   }
 
   stop(): void {
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+      this.tickTimer = null;
+    }
     this.wss?.close();
     this.wss = null;
   }
