@@ -1,3 +1,5 @@
+import { getTeamColors, hexToRgba, TEAM_COLOR_SCHEMES, type TeamColorScheme, type ColorBlindMode } from './teamColors';
+
 export interface HUDData {
   health: number;
   maxHealth: number;
@@ -68,9 +70,15 @@ export class HUD {
     headshotMarker: HTMLElement | null;
     axisTickets: HTMLElement | null;
     alliesTickets: HTMLElement | null;
+    axisTicketsBox: HTMLElement | null;
+    alliesTicketsBox: HTMLElement | null;
+    axisTicketsLabel: HTMLElement | null;
+    alliesTicketsLabel: HTMLElement | null;
     cpA: HTMLElement | null;
     cpB: HTMLElement | null;
     cpC: HTMLElement | null;
+    crosshair: HTMLElement | null;
+    crossDot: HTMLElement | null;
     vehicleHealthContainer: HTMLElement | null;
     vehicleHealthBar: HTMLElement | null;
     vehicleHealthName: HTMLElement | null;
@@ -92,9 +100,15 @@ export class HUD {
     headshotMarker: null,
     axisTickets: null,
     alliesTickets: null,
+    axisTicketsBox: null,
+    alliesTicketsBox: null,
+    axisTicketsLabel: null,
+    alliesTicketsLabel: null,
     cpA: null,
     cpB: null,
     cpC: null,
+    crosshair: null,
+    crossDot: null,
     vehicleHealthContainer: null,
     vehicleHealthBar: null,
     vehicleHealthName: null,
@@ -104,6 +118,14 @@ export class HUD {
   private enemies: { x: number; z: number; isFriendly?: boolean }[] = [];
   private crosshairSpread = 0;
   private damageVignetteTimeout: number | null = null;
+
+  // 阶段 10 P0：可访问性（色觉模式阵营配色 + 准星设置）
+  private teamColors: TeamColorScheme = TEAM_COLOR_SCHEMES.none;
+  private crosshairStyle: 'default' | 'dot' | 'none' = 'default';
+  private crosshairColor = '#ffffff';
+  private crosshairScale = 1;
+  /** 各据点当前归属（色觉切换时即时重绘控制点颜色） */
+  private lastCpOwners: string[] = [];
 
   // 阶段 9 P0：只在数据变化时写 DOM（避免每帧字符串分配 + 无效 DOM 写入）
   private lastHealthInt = -1;
@@ -140,6 +162,7 @@ export class HUD {
           <div id="cross-bottom" style="position: absolute; top: 50%; left: 50%; width: 2px; height: 8px; background: rgba(255,255,255,0.9); transform: translate(-50%, 0) translateY(4px); transition: transform 0.05s;"></div>
           <div id="cross-left" style="position: absolute; top: 50%; left: 50%; width: 8px; height: 2px; background: rgba(255,255,255,0.9); transform: translate(-100%, -50%) translateX(-4px); transition: transform 0.05s;"></div>
           <div id="cross-right" style="position: absolute; top: 50%; left: 50%; width: 8px; height: 2px; background: rgba(255,255,255,0.9); transform: translate(0, -50%) translateX(4px); transition: transform 0.05s;"></div>
+          <div id="cross-dot" style="position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: rgba(255,255,255,0.9); border-radius: 50%; transform: translate(-50%, -50%); opacity: 0;"></div>
           <div id="hitmarker" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0; transition: opacity 0.05s;">
             <svg width="24" height="24" viewBox="0 0 24 24">
               <line x1="3" y1="3" x2="7" y2="7" stroke="#ff4444" stroke-width="2.5"/>
@@ -197,7 +220,7 @@ export class HUD {
 
       <div id="conquest-container" style="position: absolute; top: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; align-items: center;">
         <div id="axis-tickets" style="background: rgba(255,68,68,0.3); padding: 8px 15px; border-radius: 5px; border: 2px solid #ff4444; text-align: center;">
-          <div style="font-size: 12px; color: #ff8888;">德军</div>
+          <div id="axis-tickets-label" style="font-size: 12px; color: #ff8888;">德军</div>
           <div id="axis-ticket-count" style="font-size: 24px; font-weight: bold; color: #ff4444;">200</div>
         </div>
         <div id="control-points" style="display: flex; gap: 10px;">
@@ -206,7 +229,7 @@ export class HUD {
           <div id="cp-C" style="width: 30px; height: 30px; border-radius: 50%; background: rgba(100,100,100,0.5); border: 2px solid #888; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px;">C</div>
         </div>
         <div id="allies-tickets" style="background: rgba(68,136,255,0.3); padding: 8px 15px; border-radius: 5px; border: 2px solid #4488ff; text-align: center;">
-          <div style="font-size: 12px; color: #88bbff;">苏军</div>
+          <div id="allies-tickets-label" style="font-size: 12px; color: #88bbff;">苏军</div>
           <div id="allies-ticket-count" style="font-size: 24px; font-weight: bold; color: #4488ff;">200</div>
         </div>
       </div>
@@ -257,9 +280,15 @@ export class HUD {
     this.elements.spawnProtection = container.querySelector('#spawn-protection');
     this.elements.axisTickets = container.querySelector('#axis-ticket-count');
     this.elements.alliesTickets = container.querySelector('#allies-ticket-count');
+    this.elements.axisTicketsBox = container.querySelector('#axis-tickets');
+    this.elements.alliesTicketsBox = container.querySelector('#allies-tickets');
+    this.elements.axisTicketsLabel = container.querySelector('#axis-tickets-label');
+    this.elements.alliesTicketsLabel = container.querySelector('#allies-tickets-label');
     this.elements.cpA = container.querySelector('#cp-A');
     this.elements.cpB = container.querySelector('#cp-B');
     this.elements.cpC = container.querySelector('#cp-C');
+    this.elements.crosshair = container.querySelector('#crosshair');
+    this.elements.crossDot = container.querySelector('#cross-dot');
     this.elements.vehicleHealthContainer = container.querySelector('#vehicle-health-container');
     this.elements.vehicleHealthBar = container.querySelector('#vehicle-health-bar');
     this.elements.vehicleHealthName = container.querySelector('#vehicle-health-name');
@@ -447,12 +476,13 @@ export class HUD {
         data.controlPoints.forEach((cp, i) => {
         const el = cpElements[i];
         if (!el) return;
+        this.lastCpOwners[i] = cp.owner;
         if (cp.owner === 'axis') {
-          el.style.background = 'rgba(255,68,68,0.6)';
-          el.style.borderColor = '#ff4444';
+          el.style.background = hexToRgba(this.teamColors.axis, 0.6);
+          el.style.borderColor = this.teamColors.axis;
         } else if (cp.owner === 'allies') {
-          el.style.background = 'rgba(68,136,255,0.6)';
-          el.style.borderColor = '#4488ff';
+          el.style.background = hexToRgba(this.teamColors.allies, 0.6);
+          el.style.borderColor = this.teamColors.allies;
         } else {
           el.style.background = 'rgba(100,100,100,0.5)';
           el.style.borderColor = '#888';
@@ -483,6 +513,80 @@ export class HUD {
     }
     if (this.crosshairRight) {
       this.crosshairRight.style.transform = `translate(0, -50%) translateX(${offset}px)`;
+    }
+  }
+
+  /**
+   * 阶段 10 P0：应用可访问性设置（色觉模式阵营配色 + 准星样式/颜色/大小）。
+   * 只更新提供的字段；色觉模式变更后强制重绘据点与小地图（颜色变了）。
+   */
+  applyAccessibility(opts: {
+    colorBlindMode?: ColorBlindMode;
+    crosshairStyle?: 'default' | 'dot' | 'none';
+    crosshairColor?: string;
+    crosshairScale?: number;
+  }): void {
+    if (opts.colorBlindMode) {
+      this.teamColors = getTeamColors(opts.colorBlindMode);
+      this.applyTeamColorStyles();
+      this.lastControlPointsKey = ''; // 据点颜色变化：下次 update 强制重绘
+      this.lastMinimapDraw = 0; // 小地图颜色变化：下次 update 立即重绘
+    }
+    if (opts.crosshairStyle) this.crosshairStyle = opts.crosshairStyle;
+    if (opts.crosshairColor) this.crosshairColor = opts.crosshairColor;
+    if (opts.crosshairScale !== undefined) this.crosshairScale = opts.crosshairScale;
+    if (opts.crosshairStyle || opts.crosshairColor || opts.crosshairScale !== undefined) {
+      this.applyCrosshairSettings();
+    }
+  }
+
+  /** 据点 UI（兵力容器/标签/数字）按当前色觉模式配色 */
+  private applyTeamColorStyles(): void {
+    const c = this.teamColors;
+    if (this.elements.axisTicketsBox) {
+      this.elements.axisTicketsBox.style.background = hexToRgba(c.axis, 0.3);
+      this.elements.axisTicketsBox.style.borderColor = c.axis;
+    }
+    if (this.elements.axisTicketsLabel) this.elements.axisTicketsLabel.style.color = c.axisLight;
+    if (this.elements.axisTickets) this.elements.axisTickets.style.color = c.axis;
+    if (this.elements.alliesTicketsBox) {
+      this.elements.alliesTicketsBox.style.background = hexToRgba(c.allies, 0.3);
+      this.elements.alliesTicketsBox.style.borderColor = c.allies;
+    }
+    if (this.elements.alliesTicketsLabel) this.elements.alliesTicketsLabel.style.color = c.alliesLight;
+    if (this.elements.alliesTickets) this.elements.alliesTickets.style.color = c.allies;
+    // 控制点按当前归属即时重绘
+    const cpElements = [this.elements.cpA, this.elements.cpB, this.elements.cpC];
+    cpElements.forEach((el, i) => {
+      if (!el) return;
+      const owner = this.lastCpOwners[i];
+      if (owner === 'axis') {
+        el.style.background = hexToRgba(c.axis, 0.6);
+        el.style.borderColor = c.axis;
+      } else if (owner === 'allies') {
+        el.style.background = hexToRgba(c.allies, 0.6);
+        el.style.borderColor = c.allies;
+      }
+    });
+  }
+
+  /** 准星：样式（四段/点/无）× 颜色 × 大小 */
+  private applyCrosshairSettings(): void {
+    const rgba = hexToRgba(this.crosshairColor, 0.9);
+    const segments = [this.crosshairTop, this.crosshairBottom, this.crosshairLeft, this.crosshairRight];
+    const showSegments = this.crosshairStyle === 'default';
+    const showDot = this.crosshairStyle === 'dot';
+    for (const seg of segments) {
+      if (!seg) continue;
+      seg.style.background = rgba;
+      seg.style.opacity = showSegments ? '1' : '0';
+    }
+    if (this.elements.crossDot) {
+      this.elements.crossDot.style.background = rgba;
+      this.elements.crossDot.style.opacity = showDot ? '1' : '0';
+    }
+    if (this.elements.crosshair) {
+      this.elements.crosshair.style.transform = `translate(-50%, -50%) scale(${this.crosshairScale})`;
     }
   }
 
@@ -548,20 +652,20 @@ export class HUD {
       if (px >= 0 && px < w && py >= 0 && py < h) {
         if (enemy.isFriendly) {
           // 友军 - 蓝色圆点
-          ctx.fillStyle = '#4488ff';
+          ctx.fillStyle = this.teamColors.allies;
           ctx.beginPath();
           ctx.arc(px, py, 3, 0, Math.PI * 2);
           ctx.fill();
           // 蓝色边框
-          ctx.strokeStyle = '#88bbff';
+          ctx.strokeStyle = this.teamColors.alliesLight;
           ctx.lineWidth = 1;
           ctx.stroke();
         } else {
           // 敌军 - 红色方块
-          ctx.fillStyle = '#ff3333';
+          ctx.fillStyle = this.teamColors.axis;
           ctx.fillRect(px - 3, py - 3, 6, 6);
           // 红色边框
-          ctx.strokeStyle = '#ff6666';
+          ctx.strokeStyle = this.teamColors.axisLight;
           ctx.lineWidth = 1;
           ctx.strokeRect(px - 3, py - 3, 6, 6);
         }

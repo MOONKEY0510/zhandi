@@ -3,7 +3,7 @@ import { loadGameSettings, type GameSettings } from '../config';
 export class SettingsMenu {
   container: HTMLElement;
   private readonly elements: Record<
-    'volumeMaster' | 'volumeSfx' | 'volumeMusic' | 'volumeVoice' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics' | 'resolutionScale' | 'reduceScreenShake',
+    'volumeMaster' | 'volumeSfx' | 'volumeMusic' | 'volumeVoice' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics' | 'resolutionScale' | 'reduceScreenShake' | 'colorBlindMode' | 'crosshairStyle' | 'crosshairColor' | 'crosshairScale',
     HTMLInputElement | HTMLSelectElement | null
   > = {
     volumeMaster: null,
@@ -17,6 +17,10 @@ export class SettingsMenu {
     graphics: null,
     resolutionScale: null,
     reduceScreenShake: null,
+    colorBlindMode: null,
+    crosshairStyle: null,
+    crosshairColor: null,
+    crosshairScale: null,
   };
 
   onApply: ((settings: GameSettings) => void) | null = null;
@@ -43,6 +47,14 @@ export class SettingsMenu {
     }
     if (this.elements.reduceScreenShake instanceof HTMLInputElement) {
       this.elements.reduceScreenShake.checked = settings.reduceScreenShake;
+    }
+    if (this.elements.colorBlindMode) this.elements.colorBlindMode.value = settings.colorBlindMode;
+    if (this.elements.crosshairStyle) this.elements.crosshairStyle.value = settings.crosshairStyle;
+    if (this.elements.crosshairColor instanceof HTMLInputElement) {
+      this.elements.crosshairColor.value = settings.crosshairColor;
+    }
+    if (this.elements.crosshairScale) {
+      this.elements.crosshairScale.value = String(Math.round(settings.crosshairScale * 100));
     }
   }
 
@@ -90,9 +102,28 @@ export class SettingsMenu {
         </label>
         ${this.slider('resolution-scale', '渲染分辨率比例（%）', 50, 150, 100)}
         <h3 style="margin:20px 0 12px;font-size:14px;color:#aaa">可访问性</h3>
-        <label style="display:flex;gap:10px;align-items:center;margin-bottom:20px">
-          <input type="checkbox" id="reduce-screen-shake"> 减少屏幕震动
+        <label style="display:block;margin-bottom:18px">减少屏幕震动
+          <input type="checkbox" id="reduce-screen-shake" style="margin-top:8px">
         </label>
+        <label style="display:block;margin-bottom:18px">色觉模式
+          <select id="color-blind-mode" style="width:100%;padding:10px;margin-top:8px;background:#2a2a2a;border:1px solid #555;color:white;border-radius:5px">
+            <option value="none">正常</option>
+            <option value="deuteranopia">绿色弱（deuteranopia）</option>
+            <option value="protanopia">红色弱（protanopia）</option>
+            <option value="tritanopia">蓝黄色弱（tritanopia）</option>
+          </select>
+        </label>
+        <label style="display:block;margin-bottom:18px">准星样式
+          <select id="crosshair-style" style="width:100%;padding:10px;margin-top:8px;background:#2a2a2a;border:1px solid #555;color:white;border-radius:5px">
+            <option value="default">四段</option>
+            <option value="dot">点</option>
+            <option value="none">无</option>
+          </select>
+        </label>
+        <label style="display:block;margin-bottom:18px">准星颜色
+          <input type="color" id="crosshair-color" value="#ffffff" style="width:100%;margin-top:8px;height:36px;background:#2a2a2a;border:1px solid #555;border-radius:5px">
+        </label>
+        ${this.slider('crosshair-scale', '准星大小（%）', 50, 200, 100)}
         <div style="display:flex;gap:10px">
           <button id="apply-button" style="flex:1;padding:12px;background:#ffcc00;border:0;border-radius:5px;font-weight:bold;cursor:pointer">应用</button>
           <button id="cancel-button" style="flex:1;padding:12px;background:transparent;border:2px solid #666;border-radius:5px;color:white;cursor:pointer">取消</button>
@@ -112,6 +143,10 @@ export class SettingsMenu {
     this.elements.graphics = container.querySelector('#graphics');
     this.elements.resolutionScale = container.querySelector('#resolution-scale');
     this.elements.reduceScreenShake = container.querySelector('#reduce-screen-shake');
+    this.elements.colorBlindMode = container.querySelector('#color-blind-mode');
+    this.elements.crosshairStyle = container.querySelector('#crosshair-style');
+    this.elements.crosshairColor = container.querySelector('#crosshair-color');
+    this.elements.crosshairScale = container.querySelector('#crosshair-scale');
 
     container.querySelector('#apply-button')?.addEventListener('click', () => this.onApply?.(this.readSettings()));
     container.querySelector('#cancel-button')?.addEventListener('click', () => this.onCancel?.());
@@ -133,6 +168,12 @@ export class SettingsMenu {
       resolutionScale: Number(this.elements.resolutionScale?.value ?? 100) / 100,
       reduceScreenShake:
         this.elements.reduceScreenShake instanceof HTMLInputElement && this.elements.reduceScreenShake.checked,
+      colorBlindMode: (this.elements.colorBlindMode?.value ?? 'none') as GameSettings['colorBlindMode'],
+      crosshairStyle: (this.elements.crosshairStyle?.value ?? 'default') as GameSettings['crosshairStyle'],
+      crosshairColor: this.elements.crosshairColor instanceof HTMLInputElement
+        ? this.elements.crosshairColor.value
+        : '#ffffff',
+      crosshairScale: Number(this.elements.crosshairScale?.value ?? 100) / 100,
     };
   }
 

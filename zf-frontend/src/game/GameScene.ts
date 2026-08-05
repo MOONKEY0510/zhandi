@@ -754,6 +754,13 @@ export class GameScene {
     this.renderer.shadowMap.enabled = savedSettings.graphics !== 'low';
     this.dynamicResolution.reset();
     this.appliedPixelRatio = -1; // 下一帧强制应用新的像素比
+    // 阶段 10：可访问性——色觉模式阵营配色 + 准星设置
+    this.hud?.applyAccessibility({
+      colorBlindMode: savedSettings.colorBlindMode,
+      crosshairStyle: savedSettings.crosshairStyle,
+      crosshairColor: savedSettings.crosshairColor,
+      crosshairScale: savedSettings.crosshairScale,
+    });
   }
 
   private setupDeathOverlay(): void {

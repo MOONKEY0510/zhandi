@@ -143,4 +143,41 @@ describe('HUD（阶段 9 P0：只在数据变化时写 DOM）', () => {
     expect(cpA.style.background).toContain('rgba(68, 136, 255'); // allies 蓝色
     hud.dispose();
   });
+
+  it('阶段 10：色觉模式切换后据点 UI/控制点颜色更新为替代配色', () => {
+    const hud = mount();
+    const cps = (owner: string) => [{ id: 'A', owner, progress: 0.5 }, { id: 'B', owner: 'allies', progress: 0.2 }];
+    hud.update(baseData({ axisTickets: 100, alliesTickets: 100, controlPoints: cps('axis') }), 0);
+    const cpA = hud.container.querySelector<HTMLElement>('#cp-A')!;
+    expect(cpA.style.borderColor).toBe('rgb(255, 68, 68)'); // 正常模式德军红（jsdom 规范化）
+
+    // 切到绿色弱：德军红 → 橙
+    hud.applyAccessibility({ colorBlindMode: 'deuteranopia' });
+    expect(cpA.style.borderColor).toBe('rgb(255, 136, 0)');
+    expect(hud.container.querySelector<HTMLElement>('#axis-ticket-count')!.style.color).toBe('rgb(255, 136, 0)');
+    expect(hud.container.querySelector<HTMLElement>('#axis-tickets')!.style.borderColor).toBe('rgb(255, 136, 0)');
+
+    // 数据未变但颜色已变：据点 key 缓存被清，下次 update 重绘且不丢新色
+    hud.update(baseData({ axisTickets: 100, alliesTickets: 100, controlPoints: cps('axis') }), 16);
+    expect(cpA.style.borderColor).toBe('rgb(255, 136, 0)');
+    hud.dispose();
+  });
+
+  it('阶段 10：准星样式/颜色/大小应用（点样式隐藏四段显示中心点）', () => {
+    const hud = mount();
+    const seg = (id: string) => hud.container.querySelector<HTMLElement>(id)!;
+    expect(seg('#cross-top').style.opacity).not.toBe('0'); // 默认四段可见
+
+    hud.applyAccessibility({ crosshairStyle: 'dot', crosshairColor: '#00ff00', crosshairScale: 1.5 });
+    expect(seg('#cross-top').style.opacity).toBe('0');
+    expect(seg('#cross-dot').style.opacity).toBe('1');
+    expect(seg('#cross-top').style.background).toContain('rgba(0, 255, 0');
+    expect(seg('#cross-dot').style.background).toContain('rgba(0, 255, 0');
+    expect(seg('#crosshair').style.transform).toContain('scale(1.5)');
+
+    hud.applyAccessibility({ crosshairStyle: 'none' });
+    expect(seg('#cross-top').style.opacity).toBe('0');
+    expect(seg('#cross-dot').style.opacity).toBe('0');
+    hud.dispose();
+  });
 });

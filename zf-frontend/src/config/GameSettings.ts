@@ -16,6 +16,14 @@ export interface GameSettings {
   resolutionScale: number;
   /** 可访问性：减少屏幕震动（震动幅度乘 0.3） */
   reduceScreenShake: boolean;
+  /** 可访问性：色觉模式（红/蓝阵营色高对比替代） */
+  colorBlindMode: 'none' | 'deuteranopia' | 'protanopia' | 'tritanopia';
+  /** 可访问性：准星样式（四段/点/无） */
+  crosshairStyle: 'default' | 'dot' | 'none';
+  /** 可访问性：准星颜色（hex） */
+  crosshairColor: string;
+  /** 可访问性：准星大小倍率 0.5-2 */
+  crosshairScale: number;
 }
 
 export const DEFAULT_GAME_SETTINGS: Readonly<GameSettings> = {
@@ -30,6 +38,10 @@ export const DEFAULT_GAME_SETTINGS: Readonly<GameSettings> = {
   graphics: 'medium',
   resolutionScale: 1,
   reduceScreenShake: false,
+  colorBlindMode: 'none',
+  crosshairStyle: 'default',
+  crosshairColor: '#ffffff',
+  crosshairScale: 1,
 };
 
 const STORAGE_KEY = 'zhandi.game-settings.v2';
@@ -85,6 +97,16 @@ export function sanitizeSettings(settings: Partial<GameSettings>): GameSettings 
       : DEFAULT_GAME_SETTINGS.graphics,
     resolutionScale: clamp(s.resolutionScale ?? DEFAULT_GAME_SETTINGS.resolutionScale, 0.5, 1.5),
     reduceScreenShake: s.reduceScreenShake ?? DEFAULT_GAME_SETTINGS.reduceScreenShake,
+    colorBlindMode: ['none', 'deuteranopia', 'protanopia', 'tritanopia'].includes(s.colorBlindMode ?? '')
+      ? (s.colorBlindMode as GameSettings['colorBlindMode'])
+      : DEFAULT_GAME_SETTINGS.colorBlindMode,
+    crosshairStyle: ['default', 'dot', 'none'].includes(s.crosshairStyle ?? '')
+      ? (s.crosshairStyle as GameSettings['crosshairStyle'])
+      : DEFAULT_GAME_SETTINGS.crosshairStyle,
+    crosshairColor: /^#[0-9a-f]{6}$/i.test(s.crosshairColor ?? '')
+      ? (s.crosshairColor as string)
+      : DEFAULT_GAME_SETTINGS.crosshairColor,
+    crosshairScale: clamp(s.crosshairScale ?? DEFAULT_GAME_SETTINGS.crosshairScale, 0.5, 2),
   };
 }
 

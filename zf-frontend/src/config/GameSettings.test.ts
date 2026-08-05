@@ -16,6 +16,10 @@ describe('GameSettings', () => {
         graphics: 'high',
         resolutionScale: 3,
         reduceScreenShake: true,
+        colorBlindMode: 'deuteranopia',
+        crosshairStyle: 'dot',
+        crosshairColor: '#00ff00',
+        crosshairScale: 2.5,
       }),
     ).toEqual({
       volumeMaster: 100,
@@ -29,6 +33,10 @@ describe('GameSettings', () => {
       graphics: 'high',
       resolutionScale: 1.5,
       reduceScreenShake: true,
+      colorBlindMode: 'deuteranopia',
+      crosshairStyle: 'dot',
+      crosshairColor: '#00ff00',
+      crosshairScale: 2,
     });
   });
 
@@ -66,5 +74,18 @@ describe('GameSettings', () => {
     expect(DEFAULT_GAME_SETTINGS.reduceScreenShake).toBe(false);
     expect(sanitizeSettings({ resolutionScale: 0.2 }).resolutionScale).toBe(0.5);
     expect(sanitizeSettings({ resolutionScale: 2 }).resolutionScale).toBe(1.5);
+  });
+
+  it('阶段 10：可访问性字段默认值与非法值回退', () => {
+    expect(DEFAULT_GAME_SETTINGS.colorBlindMode).toBe('none');
+    expect(DEFAULT_GAME_SETTINGS.crosshairStyle).toBe('default');
+    expect(DEFAULT_GAME_SETTINGS.crosshairColor).toBe('#ffffff');
+    expect(DEFAULT_GAME_SETTINGS.crosshairScale).toBe(1);
+    // 非法枚举/颜色/范围 → 默认
+    expect(sanitizeSettings({ colorBlindMode: 'sepia' as never }).colorBlindMode).toBe('none');
+    expect(sanitizeSettings({ crosshairStyle: 'fancy' as never }).crosshairStyle).toBe('default');
+    expect(sanitizeSettings({ crosshairColor: 'red' }).crosshairColor).toBe('#ffffff');
+    expect(sanitizeSettings({ crosshairScale: 9 }).crosshairScale).toBe(2);
+    expect(sanitizeSettings({ crosshairScale: 0.1 }).crosshairScale).toBe(0.5);
   });
 });
