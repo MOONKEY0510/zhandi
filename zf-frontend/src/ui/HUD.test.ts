@@ -1,26 +1,117 @@
-import { describe, it, expect } from 'vitest';
-import { shouldRedrawMinimap, MINIMAP_REFRESH_MS } from './HUD';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { HUD, shouldRedrawMinimap, MINIMAP_REFRESH_MS } from './HUD';
 
-describe('HUD 小地图降频（阶段 9 P0：低频 UI 只在数据变化时写 Canvas）', () => {
-  it('初始（lastDraw=0）立即重绘', () => {
-    expect(shouldRedrawMinimap(0, 0)).toBe(true);
-    expect(shouldRedrawMinimap(0, 10)).toBe(true);
+function baseData(overrides: Partial<Parameters<HUD['update']>[0]> = {}) {
+  return {
+    health: 100,
+    maxHealth: 100,
+    ammo: 30,
+    reserveAmmo: 90,
+    weaponName: '步枪',
+    killCount: 0,
+    deathCount: 0,
+    isReloading: false,
+    reloadProgress: 0,
+    hitMarker: false,
+    hitMarkerTime: 0,
+    damageIndicator: null,
+    score: 0,
+    position: { x: 0, y: 0, z: 0 },
+    ...overrides,
+  };
+}
+
+describe('HUD（阶段 9 P0：只在数据变化时写 DOM）', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
   });
 
-  it('间隔未满不重绘，满间隔重绘（默认 100ms = 10Hz）', () => {
-    expect(shouldRedrawMinimap(1000, 1099)).toBe(false);
-    expect(shouldRedrawMinimap(1000, 1100)).toBe(true); // 边界：≥ 间隔
-    expect(shouldRedrawMinimap(1000, 1500)).toBe(true);
+  function mount() {
+    const hud = new HUD();
+    document.body.appendChild(hud.container);
+    return hud;
+  }
+
+  it('值变化时正确写入 DOM', () => {
+    const hud = mount();
+    hud.update(baseData(), 0);
+
+    expect(hud.container.querySelector('#health-text')?.textContent).toBe('100');
+    expect(hud.container.querySelector('#health-bar')?.getAttribute('style')).toContain('width: 100%');
+    expect(hud.container.querySelector('#ammo-text')?.textContent).toBe('30 / 90');
+    expect(hud.container.querySelector('#weapon-name')?.textContent).toBe('步枪');
+    expect(hud.container.querySelector('#score-container')?.textContent).toContain('K: 0 / D: 0');
+    hud.dispose();
   });
 
-  it('MINIMAP_REFRESH_MS 常量与默认一致', () => {
-    expect(MINIMAP_REFRESH_MS).toBe(100);
-    expect(shouldRedrawMinimap(1000, 1000 + MINIMAP_REFRESH_MS - 1)).toBe(false);
+  it('数据未变化时不重复写 DOM（domWriteCount 不增）', () => {
+    const hud = mount();
+
+    hud.update(baseData(), 0);
+    const afterFirst = hud.domWriteCount;
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(hud.container.querySelector('#health-text')?.textContent).toBe('100');
+
+    hud.update(baseData(), 16);
+    hud.update(baseData(), 32);
+    expect(hud.domWriteCount).toBe(afterFirst); // 数据未变：零 DOM 写入
+    hud.dispose();
   });
 
-  it('可自定义间隔（其他低频 UI 复用）', () => {
-    expect(shouldRedrawMinimap(0, 0, 500)).toBe(true);
-    expect(shouldRedrawMinimap(1000, 1499, 500)).toBe(false);
-    expect(shouldRedrawMinimap(1000, 1500, 500)).toBe(true);
+  it('血量变化才重写血量文本，弹药文本独立缓存', () => {
+    const hud = mount();
+
+    hud.update(baseData({ health: 100 }), 0);
+    const afterFirst = hud.domWriteCount;
+
+    hud.update(baseData({ health: 100, ammo: 29 }), 16); // 弹药变、血量不变
+    expect(hud.container.querySelector('#health-text')?.textContent).toBe('100');
+    expect(hud.domWriteCount).toBeGreaterThan(afterFirst); // 弹药文本写入
+
+    const afterAmmo = hud.domWriteCount;
+    hud.update(baseData({ health: 80 }), 32);
+    expect(hud.container.querySelector('#health-text')?.textContent).toBe('80');
+    expect(hud.domWriteCount).toBeGreaterThan(afterAmmo);
+    hud.dispose();
+  });
+
+  it('弹药低量变色只在状态翻转时写', () => {
+    const hud = mount();
+    const ammoText = hud.container.querySelector<HTMLElement>('#ammo-text')!;
+
+    hud.update(baseData({ ammo: 30 }), 0);
+    const afterFirst = hud.domWriteCount;
+    hud.update(baseData({ ammo: 30 }), 16);
+    expect(hud.domWriteCount).toBe(afterFirst);
+    expect(ammoText.style.color).toBe('white');
+
+    hud.update(baseData({ ammo: 4 }), 32);
+    expect(ammoText.style.color).toBe('rgb(255, 102, 102)'); // jsdom 规范化 #ff6666
+    const afterLow = hud.domWriteCount;
+    hud.update(baseData({ ammo: 4 }), 48);
+    expect(hud.domWriteCount).toBe(afterLow);
+
+    hud.update(baseData({ ammo: 30 }), 64);
+    expect(ammoText.style.color).toBe('white');
+    hud.dispose();
+  });
+
+  it('换弹条显示/隐藏状态缓存，进度连续更新', () => {
+    const hud = mount();
+
+    hud.update(baseData({ isReloading: false }), 0);
+    const afterFirst = hud.domWriteCount;
+    hud.update(baseData({ isReloading: false }), 16);
+    expect(hud.domWriteCount).toBe(afterFirst); // 未换弹：只首次写 opacity '0'
+
+    hud.update(baseData({ isReloading: true, reloadProgress: 0.5 }), 32);
+    expect(hud.container.querySelector<HTMLElement>('#reload-bar')?.style.opacity).toBe('1');
+    expect(hud.container.querySelector<HTMLElement>('#reload-progress')?.style.width).toContain('50%');
+
+    const afterReload = hud.domWriteCount;
+    hud.update(baseData({ isReloading: false }), 48);
+    expect(hud.container.querySelector<HTMLElement>('#reload-bar')?.style.opacity).toBe('0');
+    expect(hud.domWriteCount).toBeGreaterThan(afterReload);
+    hud.dispose();
   });
 });

@@ -105,6 +105,18 @@ export class HUD {
   private crosshairSpread = 0;
   private damageVignetteTimeout: number | null = null;
 
+  // 阶段 9 P0：只在数据变化时写 DOM（避免每帧字符串分配 + 无效 DOM 写入）
+  private lastHealthInt = -1;
+  private lastHealthBarWidth = -1;
+  private lastAmmoText = '';
+  private lastAmmoLowColor: boolean | null = null;
+  private lastWeaponName = '';
+  private lastScoreText = '';
+  private lastLowAmmoWarningVisible: boolean | null = null;
+  private lastReloadBarVisible: boolean | null = null;
+  /** 阶段 9：实际 DOM 写入次数（测试断言 + 性能观测：每帧 DOM 写入是否随数据去重） */
+  domWriteCount = 0;
+
   constructor() {
     this.container = this.createHUD();
   }
@@ -261,48 +273,76 @@ export class HUD {
   }
 
   update(data: HUDData, currentTime: number): void {
-    // 血量
+    // 血量（阶段 9：只在数据变化时写 DOM）
+    const healthInt = Math.ceil(data.health);
     if (this.elements.healthBar) {
-      this.elements.healthBar.style.width = `${(data.health / data.maxHealth) * 100}%`;
+      const widthPct = (data.health / data.maxHealth) * 100;
+      if (widthPct !== this.lastHealthBarWidth) {
+        this.elements.healthBar.style.width = `${widthPct}%`;
+        this.lastHealthBarWidth = widthPct;
+        this.domWriteCount += 1;
+      }
     }
-    if (this.elements.healthText) {
-      this.elements.healthText.textContent = Math.ceil(data.health).toString();
+    if (this.elements.healthText && healthInt !== this.lastHealthInt) {
+      this.elements.healthText.textContent = healthInt.toString();
+      this.lastHealthInt = healthInt;
+      this.domWriteCount += 1;
     }
 
-    // 弹药
+    // 弹药（含低弹量变色，只在值/状态变化时写）
     if (this.elements.ammoText) {
-      this.elements.ammoText.textContent = `${data.ammo} / ${data.reserveAmmo}`;
-      // 低弹量变色
-      if (data.ammo <= 5) {
-        this.elements.ammoText.style.color = '#ff6666';
-      } else {
-        this.elements.ammoText.style.color = 'white';
+      const ammoText = `${data.ammo} / ${data.reserveAmmo}`;
+      if (ammoText !== this.lastAmmoText) {
+        this.elements.ammoText.textContent = ammoText;
+        this.lastAmmoText = ammoText;
+        this.domWriteCount += 1;
+      }
+      const lowAmmo = data.ammo <= 5;
+      if (lowAmmo !== this.lastAmmoLowColor) {
+        this.elements.ammoText.style.color = lowAmmo ? '#ff6666' : 'white';
+        this.lastAmmoLowColor = lowAmmo;
+        this.domWriteCount += 1;
       }
     }
 
     // 低弹量提示
     if (this.lowAmmoWarning) {
-      if (data.ammo <= 5 && !data.isReloading) {
-        this.lowAmmoWarning.style.opacity = '1';
-      } else {
-        this.lowAmmoWarning.style.opacity = '0';
+      const show = data.ammo <= 5 && !data.isReloading;
+      if (show !== this.lastLowAmmoWarningVisible) {
+        this.lowAmmoWarning.style.opacity = show ? '1' : '0';
+        this.lastLowAmmoWarningVisible = show;
+        this.domWriteCount += 1;
       }
     }
 
-    if (this.elements.weaponName) {
+    if (this.elements.weaponName && data.weaponName !== this.lastWeaponName) {
       this.elements.weaponName.textContent = data.weaponName;
+      this.lastWeaponName = data.weaponName;
+      this.domWriteCount += 1;
     }
     if (this.elements.scoreText) {
-      this.elements.scoreText.textContent = `K: ${data.killCount} / D: ${data.deathCount}`;
+      const scoreText = `K: ${data.killCount} / D: ${data.deathCount}`;
+      if (scoreText !== this.lastScoreText) {
+        this.elements.scoreText.textContent = scoreText;
+        this.lastScoreText = scoreText;
+        this.domWriteCount += 1;
+      }
     }
 
-    // 换弹进度条
+    // 换弹进度条（显示/隐藏状态缓存；进度连续变化时照常写）
     if (this.reloadBar && this.reloadProgress) {
       if (data.isReloading) {
-        this.reloadBar.style.opacity = '1';
+        if (!this.lastReloadBarVisible) {
+          this.reloadBar.style.opacity = '1';
+          this.lastReloadBarVisible = true;
+          this.domWriteCount += 1;
+        }
         this.reloadProgress.style.width = `${data.reloadProgress * 100}%`;
-      } else {
+        this.domWriteCount += 1;
+      } else if (this.lastReloadBarVisible) {
         this.reloadBar.style.opacity = '0';
+        this.lastReloadBarVisible = false;
+        this.domWriteCount += 1;
       }
     }
 
