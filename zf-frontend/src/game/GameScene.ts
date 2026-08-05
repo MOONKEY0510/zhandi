@@ -7,6 +7,7 @@ import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
 import { NetworkGameClient } from '../network/NetworkGameClient';
+import { ClientPrediction } from '../network/ClientPrediction';
 import { TICK_RATE_HZ } from '../../shared/protocol';
 import type { ServerGameState } from '../../shared/protocol';
 import { WeaponSystem, WeaponType, FireMode } from '../weapons/WeaponSystem';
@@ -59,6 +60,12 @@ const EQUIPMENT_ORDER: EquipmentType[] = [
   EquipmentType.MINE,
 ];
 
+/**
+ * 联网权威回写收敛系数（0..1）：每帧把本地玩家渲染位置向服务端预测轨迹收敛的比例。
+ * 0.2 = 每帧吸收 20% 水平偏差，兼顾手感平滑与服务端一致性（快照校正已平滑，这里只做渲染层回写）。
+ */
+const NETWORK_POSITION_CONVERGE = 0.2;
+
 /** 反坦克火箭参数（阶段 7 反载具链） */
 const PANZERFAUST_SPEED = 55;
 const PANZERFAUST_RADIUS = 4.5;
@@ -102,6 +109,11 @@ export class GameScene {
   private networkGameClient: NetworkGameClient | null = null;
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
+  /**
+   * 本地预测（联网模式）：输入发送时自动推进、快照按 ackSeq 校正；
+   * 每帧把本地玩家渲染位置向预测轨迹平滑收敛（服务端权威移动，无碰撞模型的水平偏差由校正吸收）。
+   */
+  private clientPrediction: ClientPrediction | null = null;
   private remotePlayerMeshes: Map<string, THREE.Group> = new Map();
 
   // 武器
@@ -848,7 +860,15 @@ export class GameScene {
     this.networkGameClient.onError = (code, message) => {
       console.warn(`[网络] 服务器错误 ${code}: ${message}`);
     };
-    await this.networkGameClient.connect(wsUrl, this.config.network.roomId, playerId, '玩家');
+    // 本地预测初始状态：以当前玩家位置/朝向为起点（服务端首快照会立即校正）
+    const pos = this.player?.getPosition() ?? { x: 0, y: 0, z: 0 };
+    const rot = this.player?.getRotation() ?? { yaw: 0, pitch: 0 };
+    this.clientPrediction = new ClientPrediction({
+      x: pos.x, y: pos.y, z: pos.z, yaw: rot.yaw, pitch: rot.pitch, health: 100, alive: true,
+    });
+    await this.networkGameClient.connect(wsUrl, this.config.network.roomId, playerId, '玩家', {
+      prediction: this.clientPrediction,
+    });
   }
 
   /** 每帧将远端玩家快照插值姿势同步到 mesh（创建/更新/移除，替代旧版直接瞬移） */
@@ -2305,6 +2325,20 @@ export class GameScene {
     this.pendingMouseMovement.x = 0;
     this.pendingMouseMovement.y = 0;
 
+    // 联网权威回写：本地渲染位置向服务端预测轨迹平滑收敛
+    // （水平 x/z；垂直 y 与跳跃/碰撞保留本地物理，服务端移动模型暂无 y 轴与碰撞）
+    if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle) {
+      const rs = this.clientPrediction.renderState;
+      const pos = this.player.getPosition();
+      if (pos) {
+        const nx = pos.x + (rs.x - pos.x) * NETWORK_POSITION_CONVERGE;
+        const nz = pos.z + (rs.z - pos.z) * NETWORK_POSITION_CONVERGE;
+        if (Math.abs(nx - pos.x) > 0.0001 || Math.abs(nz - pos.z) > 0.0001) {
+          this.player.teleportHorizontal(nx, nz);
+        }
+      }
+    }
+
     // 载具控制
     this.updateVehicleControl(dt);
     this.vehicleSystem.update(dt, this.simulationTimeMs);
@@ -2564,6 +2598,7 @@ export class GameScene {
     this.inputManager.dispose();
     this.networkGameClient?.disconnect();
     this.serverGameState = null;
+    this.clientPrediction = null;
     for (const mesh of this.remotePlayerMeshes.values()) {
       this.scene.remove(mesh);
     }

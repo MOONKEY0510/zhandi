@@ -13,6 +13,7 @@ import type { PlayerInput, ServerGameState } from '../../shared/protocol.ts';
 import type { InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { RemotePlayerView } from './RemotePlayerView.ts';
 import type { NetSimulator } from './NetSimulator.ts';
+import type { ClientPrediction } from './ClientPrediction.ts';
 
 /** 客户端输入子集：与 PlayerInput 一致但省略协议字段（seq/clientTick 由 NetClient 填充） */
 export type ClientInput = Omit<PlayerInput, 'kind' | 'seq' | 'clientTick'>;
@@ -26,6 +27,11 @@ export interface NetworkGameClientOptions {
   simulator?: NetSimulator;
   /** 自定义传输工厂（测试/同构环境：每次重连新建连接） */
   transportFactory?: () => RawTransport;
+  /**
+   * 本地预测（服务端权威移动）：NetClient 发送输入时自动推进本地预测，
+   * 快照到达时按服务端 ackSeq 校正（平滑收敛/硬校正），GameScene 据此回写本地渲染位置。
+   */
+  prediction?: ClientPrediction;
 }
 
 export class NetworkGameClient {
@@ -58,6 +64,7 @@ export class NetworkGameClient {
       pingIntervalMs: options.pingIntervalMs,
       simulator: options.simulator,
       transportFactory: options.transportFactory,
+      prediction: options.prediction,
     });
     this.client.onSnapshot = (players: Map<string, InterpolatedPlayer>) => {
       // 排除本地玩家：本地渲染由本地模拟/预测驱动，服务端回声不参与远端实体渲染

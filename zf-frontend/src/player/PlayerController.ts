@@ -318,6 +318,17 @@ export class PlayerController {
     return this.physicsWorld.getBodyPosition(this.bodyId);
   }
 
+  /**
+   * 联网权威回写：水平位置向服务端预测轨迹收敛（保留 y 与刚体速度，
+   * 不破坏跳跃/下蹲/物理碰撞手感；垂直由本地物理负责，服务端移动模型暂无 y 轴）。
+   * 仅供联网模式（GameScene 每帧调用），单机模式不触发。
+   */
+  teleportHorizontal(x: number, z: number): void {
+    const pos = this.physicsWorld.getBodyPosition(this.bodyId);
+    if (!pos) return;
+    this.physicsWorld.setBodyPosition(this.bodyId, { x, y: pos.y, z });
+  }
+
   getRotation(): { yaw: number; pitch: number } {
     return { yaw: this.yaw, pitch: this.pitch };
   }
