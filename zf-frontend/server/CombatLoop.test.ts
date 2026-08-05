@@ -98,7 +98,7 @@ describe('服务端权威战斗闭环（阶段 8 第十七批：死亡/重生/�
   const clients: NetClient[] = [];
 
   beforeAll(async () => {
-    server = new ServerApp({ port: 0, defaultRoomId: 'combat' });
+    server = new ServerApp({ port: 0, defaultRoomId: 'combat', staticLayout: [] });
     const port = await server.start();
     url = `ws://127.0.0.1:${port}`;
   }, 10000);

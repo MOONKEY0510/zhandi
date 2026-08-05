@@ -85,7 +85,7 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
   const clients: NetClient[] = [];
 
   beforeAll(async () => {
-    server = new ServerApp({ port: 0, defaultRoomId: 'netplay' });
+    server = new ServerApp({ port: 0, defaultRoomId: 'netplay', staticLayout: [] });
     const port = await server.start();
     url = `ws://127.0.0.1:${port}`;
   }, 10000);

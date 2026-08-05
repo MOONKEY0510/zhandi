@@ -26,6 +26,7 @@ import {
 } from '../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../shared/codec.ts';
 import { computeVisiblePlayers } from '../shared/interest.ts';
+import { generateBerlinLayout, layoutToStaticObstacles, STATIC_OBSTACLE_ID_BASE, type StaticBuildingLayout, type StaticObstacle } from '../shared/mapLayout.ts';
 import { SimClock } from './SimClock.ts';
 import { RoomManager, type Room } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
@@ -39,6 +40,8 @@ export interface ServerAppOptions {
   port?: number;
   /** 大厅默认房间 */
   defaultRoomId?: string;
+  /** 静态建筑布局（阶段 9 确定性化；缺省用 shared 固定布局。测试可传 [] 关闭静态挡弹） */
+  staticLayout?: StaticBuildingLayout[];
   /** 每 tick 调试回调（压测/监控用） */
   onStats?: (stats: { tick: number; rooms: number; players: number; corrections: number }) => void;
 }
@@ -87,11 +90,14 @@ export class ServerApp {
   private totalCorrections = 0;
   /** 有限历史回溯：玩家位置历史（弹道裁决按发射时刻采样，阶段 8 第十九批） */
   private readonly positionHistories = new Map<string, PositionHistory>();
+  /** 阶段 9：静态建筑弹道障碍物（与客户端地图同源 shared/mapLayout，确定性几何，不可破坏） */
+  private readonly staticMapObstacles: StaticObstacle[];
   /** tick 循环定时器（stop 时清除，优雅关闭） */
   private tickTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ServerAppOptions = {}) {
     this.options = { defaultRoomId: 'lobby-1', ...options };
+    this.staticMapObstacles = layoutToStaticObstacles(options.staticLayout ?? generateBerlinLayout());
     this.clock.onTick = (tick, deltaSeconds, shouldSnapshot) => {
       this.stepSimulation(tick, deltaSeconds, shouldSnapshot);
     };
@@ -471,11 +477,15 @@ export class ServerApp {
         });
       }
     }
-    // 破坏物挡弹障碍（服务端权威：弹道与旋转矩形相交 → 弹丸消散 + 破坏物扣血；已破坏对象不挡弹）
+    // 挡弹障碍（服务端权威：弹道与旋转矩形相交 → 弹丸消散 + 破坏物扣血；已破坏对象不挡弹）
+    // 阶段 9：静态建筑并入——布局与客户端同源（shared/mapLayout 确定性生成），不可破坏只挡弹不扣血
     const obstacles: ProjectileObstacle[] = [];
     for (const room of this.roomManager.listRooms()) {
       if (!room.destructibles) continue;
       for (const ob of room.destructibles.obstacles()) {
+        obstacles.push({ ...ob, roomId: room.id });
+      }
+      for (const ob of this.staticMapObstacles) {
         obstacles.push({ ...ob, roomId: room.id });
       }
     }
@@ -516,6 +526,8 @@ export class ServerApp {
       },
       obstacles,
       (hit) => {
+        // 静态建筑挡弹：只消散不扣血（不可破坏）；可破坏物走扣血广播
+        if (hit.obstacleId >= STATIC_OBSTACLE_ID_BASE) return;
         // 破坏物挡弹：弹丸消散 + 破坏物受击 → 状态变化时广播 destructible_state
         const room = this.roomManager.getRoom(hit.roomId ?? '');
         if (!room?.destructibles) return;

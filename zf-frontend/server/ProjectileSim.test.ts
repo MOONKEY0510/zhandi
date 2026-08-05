@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ProjectileSim, segmentHitsRotatedRect, segmentYOverlaps, type ProjectileTarget, type ProjectileObstacle } from './ProjectileSim.ts';
 import { BULLET_DAMAGE, BULLET_HEIGHT_HALF, BULLET_HIT_RADIUS, BULLET_MAX_RANGE } from '../shared/protocol.ts';
+import { generateBerlinLayout, layoutToStaticObstacles } from '../shared/mapLayout.ts';
 
 const DT = 1 / 30;
 
@@ -227,5 +228,23 @@ describe('ProjectileSim（阶段 8 服务端命中裁决）', () => {
     let hits = 0;
     for (let i = 0; i < 100; i++) hits += sim.step(DT, [rewindMiss]).length;
     expect(hits).toBe(0);
+  });
+
+  it('静态建筑挡弹（阶段 9 确定性化）：shared 布局生成的建筑障碍拦截弹道，目标不命中', () => {
+    const sim = new ProjectileSim();
+    // 取第一个静态建筑（轴对齐矩形，rotationY=0）；弹道 z 对准建筑中心 z → 必然穿过
+    const [building] = layoutToStaticObstacles(generateBerlinLayout());
+    const enemy = target('e1', 1, building.x + building.halfWidth + 3, building.z, 0);
+    // 弹道从 (0,1.5,building.z) 沿 +x：y=1.5 在建筑垂直范围（0..height）内
+    sim.spawn({ ownerId: 'p1', team: 0, x: 0, y: 1.5, z: building.z, yaw: Math.PI / 2, pitch: 0 });
+    const obstacleHits: { obstacleId: number }[] = [];
+    for (let i = 0; i < 400; i++) {
+      const hits = sim.step(DT, [enemy], undefined, [building], (h) => obstacleHits.push(h));
+      if (hits.length > 0 || obstacleHits.length > 0) break;
+    }
+    expect(obstacleHits).toHaveLength(1);
+    expect(obstacleHits[0].obstacleId).toBe(building.id);
+    expect(sim.stats.hits).toBe(0); // 建筑后方目标不被命中
+    expect(sim.count).toBe(0); // 弹丸被建筑拦截消散
   });
 });

@@ -49,7 +49,7 @@ describe('安全验收（阶段 8：越权/畸形/伪造消息拒绝）', () => 
   let url: string;
 
   beforeAll(async () => {
-    server = new ServerApp({ port: 0, defaultRoomId: 'sec' });
+    server = new ServerApp({ port: 0, defaultRoomId: 'sec', staticLayout: [] });
     const port = await server.start();
     url = `ws://127.0.0.1:${port}`;
   }, 10000);

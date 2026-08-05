@@ -82,7 +82,7 @@ describe('服务端权威游戏状态（阶段 8 征服规则端到端）', () =
   const states: ServerGameState[] = [];
 
   beforeAll(async () => {
-    server = new ServerApp({ port: 0, defaultRoomId: 'gs' });
+    server = new ServerApp({ port: 0, defaultRoomId: 'gs', staticLayout: [] });
     const port = await server.start();
     url = `ws://127.0.0.1:${port}`;
   }, 10000);

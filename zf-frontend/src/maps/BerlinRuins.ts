@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { gameplayRandom } from '../core/Random';
+import { generateBerlinLayout, BERLIN_LAYOUT_SEED } from '../../shared/mapLayout';
 
 export interface MapConfig {
   size: number;
@@ -65,8 +66,10 @@ export class BerlinRuins {
 
   private createBuildings(): void {
     // 阶段 9：20 建筑（随机尺寸/颜色）+ 60 窗户 → 两个 InstancedMesh；建筑实例用 instanceColor 还原配色
+    // 布局来自 shared/mapLayout 确定性生成（同源：服务端弹道挡弹裁决用同一布局）
     const buildingColors = [0x4a4a4a, 0x3a3a3a, 0x5a5a5a, 0x2a2a2a, 0x6a6a6a];
-    const buildingCount = this.config.buildingCount;
+    const layouts = generateBerlinLayout(BERLIN_LAYOUT_SEED);
+    const buildingCount = layouts.length;
 
     const boxGeometry = new THREE.BoxGeometry(1, 1, 1); // 单位立方体 + per-instance 缩放
     const boxMaterial = new THREE.MeshStandardMaterial({
@@ -90,16 +93,9 @@ export class BerlinRuins {
     const color = new THREE.Color();
     let windowIndex = 0;
 
-    // 随机调用顺序与原实现一致（同一种子下地图布局不变）
+    // 布局随机调用顺序与 shared/mapLayout 一致（同一种子下地图布局不变）
     for (let i = 0; i < buildingCount; i++) {
-      const width = 8 + gameplayRandom() * 12;
-      const depth = 8 + gameplayRandom() * 12;
-      const height = 5 + gameplayRandom() * 15;
-
-      const x = (gameplayRandom() - 0.5) * (this.config.size - width);
-      const z = (gameplayRandom() - 0.5) * (this.config.size - depth);
-
-      const c = buildingColors[Math.floor(gameplayRandom() * buildingColors.length)];
+      const { x, z, width, depth, height, colorIndex, windows } = layouts[i];
 
       // 建筑本体
       scale.set(width, height, depth);
@@ -107,15 +103,12 @@ export class BerlinRuins {
       quat.identity();
       matrix.compose(pos, quat, scale);
       buildingInstances.setMatrixAt(i, matrix);
-      color.setHex(c);
+      color.setHex(buildingColors[colorIndex]);
       buildingInstances.setColorAt(i, color);
 
-      // 窗户（原实现每建筑 3 个，贴在 z+ 面）
-      for (let j = 0; j < 3; j++) {
-        const wx = x + (gameplayRandom() - 0.5) * (width - 2);
-        const wy = 2 + gameplayRandom() * (height - 4);
-        const wz = z + (width / 2) + 0.1;
-        pos.set(wx, wy, wz);
+      // 窗户（布局自带，贴在建筑 z+ 面）
+      for (const w of windows) {
+        pos.set(w.x, w.y, w.z);
         quat.identity();
         scale.set(1, 1, 1);
         matrix.compose(pos, quat, scale);

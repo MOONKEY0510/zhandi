@@ -78,7 +78,7 @@ describe('服务端权威载具（阶段 8 端到端）', () => {
   const clients: NetClient[] = [];
 
   beforeAll(async () => {
-    server = new ServerApp({ port: 0, defaultRoomId: 'vehicles' });
+    server = new ServerApp({ port: 0, defaultRoomId: 'vehicles', staticLayout: [] });
     url = `ws://127.0.0.1:${await server.start()}`;
   });
 
