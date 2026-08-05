@@ -5,7 +5,10 @@ export interface PerformanceBudget {
   targetFPS: number;
   maxDrawCalls: number;
   maxTriangles: number;
-  maxTextureMemoryMB: number;
+  /** 纹理数量上限（renderer.info.memory.textures 真实计数；旧版 maxTextureMemoryMB 字节估算无真实数据源，已停用） */
+  maxTextures: number;
+  /** 几何体数量上限（renderer.info.memory.geometries） */
+  maxGeometries: number;
   maxFrameTime: number;
 }
 
@@ -13,16 +16,25 @@ export const DEFAULT_BUDGET: PerformanceBudget = {
   targetFPS: DEFAULT_GAME_CONFIG.performance.targetFps,
   maxDrawCalls: DEFAULT_GAME_CONFIG.performance.maxDrawCalls,
   maxTriangles: DEFAULT_GAME_CONFIG.performance.maxTriangles,
-  maxTextureMemoryMB: DEFAULT_GAME_CONFIG.performance.maxTextureMemoryMB,
+  maxTextures: 512,
+  maxGeometries: 1024,
   maxFrameTime: DEFAULT_GAME_CONFIG.performance.maxFrameTimeMs,
 };
 
+export interface RendererStats {
+  drawCalls: number;
+  triangles: number;
+  textures: number;
+  geometries: number;
+}
+
 export class PerformanceBudgetManager {
   private budget: PerformanceBudget;
-  private currentStats = {
+  private currentStats: RendererStats & { frameTime: number } = {
     drawCalls: 0,
     triangles: 0,
-    textureMemoryMB: 0,
+    textures: 0,
+    geometries: 0,
     frameTime: 0,
   };
 
@@ -48,9 +60,15 @@ export class PerformanceBudgetManager {
       );
     }
 
-    if (this.currentStats.textureMemoryMB > this.budget.maxTextureMemoryMB) {
+    if (this.currentStats.textures > this.budget.maxTextures) {
       violations.push(
-        `Texture memory: ${this.currentStats.textureMemoryMB.toFixed(2)}MB > ${this.budget.maxTextureMemoryMB}MB`
+        `Textures: ${this.currentStats.textures} > ${this.budget.maxTextures}`
+      );
+    }
+
+    if (this.currentStats.geometries > this.budget.maxGeometries) {
+      violations.push(
+        `Geometries: ${this.currentStats.geometries} > ${this.budget.maxGeometries}`
       );
     }
 
@@ -66,24 +84,35 @@ export class PerformanceBudgetManager {
     };
   }
 
+  /**
+   * 从 renderer.info 提取真实渲染统计（textures/geometries 为计数。
+   * 旧实现把纹理数量 × 4 字节冒充 MB 是虚构数据——three.js 不暴露纹理字节数，
+   * 改为数量型预算，避免"有预算无数据"）。
+   */
   updateStats(renderer: THREE.WebGLRenderer): void {
     const info = renderer.info;
-    this.currentStats.drawCalls = info.render.calls;
-    this.currentStats.triangles = info.render.triangles;
+    this.setRendererStats({
+      drawCalls: info.render.calls,
+      triangles: info.render.triangles,
+      textures: info.memory.textures,
+      geometries: info.memory.geometries,
+    });
+  }
 
-    const textures = renderer.info.memory.textures as number;
-    this.currentStats.textureMemoryMB = (textures * 4) / (1024 * 1024);
+  /** 纯数据入口（测试/非 WebGL 环境注入） */
+  setRendererStats(stats: RendererStats): void {
+    this.currentStats = { ...stats, frameTime: this.currentStats.frameTime };
   }
 
   setFrameTime(frameTime: number): void {
     this.currentStats.frameTime = frameTime;
   }
 
-  getCurrentStats() {
+  getCurrentStats(): RendererStats & { frameTime: number } {
     return { ...this.currentStats };
   }
 
-  getBudget() {
+  getBudget(): PerformanceBudget {
     return { ...this.budget };
   }
 }

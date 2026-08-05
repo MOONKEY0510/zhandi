@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { loadGameSettings, resolveGameConfig, saveGameSettings, validateGameConfig } from '../config';
 import { EventBus, FixedStepClock, GameState, GameStateMachine } from '../core';
 import { gameplayRandom, useGameplaySeed, useSystemRandom } from '../core/Random';
-import { PerformanceMonitor, PerformancePanel } from '../performance';
+import { PerformanceMonitor, PerformancePanel, FrameBudget } from '../performance';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
@@ -113,6 +113,8 @@ export class GameScene {
   private readonly simulationClock: FixedStepClock;
   private readonly performanceMonitor: PerformanceMonitor;
   private readonly performancePanel: PerformancePanel;
+  /** 阶段 9：CPU 各阶段帧预算采集（主循环埋点，互斥分段测量） */
+  private readonly frameBudget = new FrameBudget();
   private lastPerformanceCapture = 0;
   private physicsWorld!: PhysicsWorld;
   private player: PlayerController | null = null;
@@ -2546,7 +2548,9 @@ export class GameScene {
       this.simulationClock.reset(time);
     }
 
+    this.frameBudget.begin('render');
     this.renderer.render(this.scene, this.camera);
+    this.frameBudget.end('render');
     if (this.stateMachine.is(GameState.PLAYING, GameState.PAUSED, GameState.ROUND_END)) {
       this.updatePerformanceMetrics(time);
     }
@@ -2556,6 +2560,9 @@ export class GameScene {
   private simulateFixedStep(dt: number, time: number): void {
     this.roundFlow.update(dt);
     if (!this.roundFlow.canSimulateCombat()) return;
+
+    // 帧预算：战斗模拟段（玩家/载具/武器/特效/装备/生命/天气/音频，AI 与网络/UI/物理单独分段）
+    this.frameBudget.begin('simulation');
 
     // 玩家更新（联网驾驶时停用本地玩家控制；联网死亡时服务端权威停摆）
     if (this.player && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle && (!this.networkGameClient || this.networkAlive)) {
@@ -2634,6 +2641,8 @@ export class GameScene {
     this.handleEquipmentDamage(time);
 
     // AI
+    this.frameBudget.end('simulation');
+    this.frameBudget.begin('ai');
     if (this.player) {
       const playerPos = this.player.getPosition();
       if (playerPos) {
@@ -2651,6 +2660,8 @@ export class GameScene {
     }
 
     this.updateAIHealthBars(time);
+    this.frameBudget.end('ai');
+    this.frameBudget.begin('simulation');
 
     // 生命
     this.healthSystem.update(time);
@@ -2690,6 +2701,8 @@ export class GameScene {
     }
 
     // 网络：输入序列发送（服务端权威移动裁决，对齐服务器 tick 频率）+ 远端快照插值渲染
+    this.frameBudget.end('simulation');
+    this.frameBudget.begin('network');
     if (this.networkGameClient && this.player && !this.inNetworkVehicle && this.networkAlive && time - this.lastNetworkUpdate > this.networkUpdateInterval) {
       const input = this.inputManager.state;
       const rot = this.player.getRotation();
@@ -2706,8 +2719,10 @@ export class GameScene {
       this.lastNetworkUpdate = time;
     }
     this.syncRemotePlayers();
+    this.frameBudget.end('network');
 
     // HUD
+    this.frameBudget.begin('ui');
     const currentEquip = EQUIPMENT_ORDER[this.currentEquipmentIndex];
     let equipCount = 1;
     let equipName = '手雷';
@@ -2809,7 +2824,10 @@ export class GameScene {
     }
 
     // 固定时间步物理
+    this.frameBudget.end('ui');
+    this.frameBudget.begin('physics');
     this.physicsWorld.step(dt);
+    this.frameBudget.end('physics');
   }
 
   private updatePerformanceMetrics(time: number): void {
@@ -2831,6 +2849,7 @@ export class GameScene {
         voicesReal: voiceStats.real,
         voicesVirtual: voiceStats.virtual,
         vfxActive: this.vfxPool.getActiveCount(),
+        frameBudget: this.frameBudget.allStats(),
       });
       this.lastPerformanceCapture = time;
     }

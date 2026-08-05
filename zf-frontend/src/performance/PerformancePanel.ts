@@ -1,10 +1,13 @@
 import type { PerformanceMonitor, PerformanceSnapshot } from './PerformanceMonitor';
+import type { FrameBudgetSectionStats } from './FrameBudget';
 
 /** 阶段 6 预算统计：音频 voice 与特效池的实时占用 */
 export interface PerformanceExtras {
   voicesReal: number;
   voicesVirtual: number;
   vfxActive: number;
+  /** 阶段 9：CPU 各阶段帧预算（超平均预算用 ▲ 标记） */
+  frameBudget?: FrameBudgetSectionStats[];
 }
 
 export class PerformancePanel {
@@ -84,6 +87,15 @@ export class PerformancePanel {
         `VOICE  ${extras.voicesReal} real / ${extras.voicesVirtual} virt`,
         `VFX    ${extras.vfxActive} active`,
       );
+      if (extras.frameBudget) {
+        lines.push('-- FRAME BUDGET (ms, avg/P95/budget) --');
+        for (const s of extras.frameBudget) {
+          const over = s.avgMs > s.budgetMs ? ' ▲' : '';
+          lines.push(
+            `${s.label.padEnd(12)} ${s.avgMs.toFixed(2)}/${s.p95Ms.toFixed(2)}/${s.budgetMs.toFixed(1)}${over}`,
+          );
+        }
+      }
     }
     this.values.textContent = lines.join('\n');
   }

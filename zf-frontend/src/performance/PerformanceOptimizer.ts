@@ -1,17 +1,25 @@
 import * as THREE from 'three';
 import { PerformanceMonitor } from '../performance/PerformanceMonitor';
 import { PerformanceBudgetManager } from '../performance/PerformanceBudget';
+import { FrameBudget } from '../performance/FrameBudget';
 
 export class PerformanceOptimizer {
   private monitor: PerformanceMonitor;
   private budgetManager: PerformanceBudgetManager;
   private renderer: THREE.WebGLRenderer;
   private optimizationLevel: 'low' | 'medium' | 'high' = 'medium';
+  /** 阶段 9：CPU 各阶段帧预算采集（埋点由 GameScene 帧循环调用 begin/end） */
+  readonly frameBudget: FrameBudget;
 
-  constructor(renderer: THREE.WebGLRenderer, budgetManager: PerformanceBudgetManager) {
+  constructor(
+    renderer: THREE.WebGLRenderer,
+    budgetManager: PerformanceBudgetManager,
+    frameBudget: FrameBudget = new FrameBudget(),
+  ) {
     this.renderer = renderer;
     this.monitor = new PerformanceMonitor();
     this.budgetManager = budgetManager;
+    this.frameBudget = frameBudget;
   }
 
   setOptimizationLevel(level: 'low' | 'medium' | 'high'): void {
@@ -71,10 +79,11 @@ export class PerformanceOptimizer {
       monitor: this.monitor.getStats(),
       budget: this.budgetManager.getCurrentStats(),
       budgetManager: this.budgetManager.getBudget(),
+      frameBudget: this.frameBudget.allStats(),
     };
   }
 
   isWithinBudget(): boolean {
-    return this.budgetManager.checkBudget().withinBudget;
+    return this.budgetManager.checkBudget().withinBudget && this.frameBudget.isWithinBudget();
   }
 }
