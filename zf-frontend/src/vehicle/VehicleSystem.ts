@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { getRapier, type RapierModule } from '../physics/PhysicsLoader';
 import { TeamId } from '../game/ConquestMode';
 
 export enum VehicleType {
@@ -181,6 +182,8 @@ export class Vehicle {
   mesh: THREE.Group;
   body: RAPIER.RigidBody | null = null;
   collider: RAPIER.Collider | null = null;
+  /** Rapier 模块引用（阶段 9：延迟加载，物理模块经 PhysicsLoader 注入） */
+  private readonly rapier: RapierModule = getRapier();
   /** 所属阵营（阶段 7 AI 反载具：友方载具不被打，敌方载具被 AI 集火） */
   team: TeamId = TeamId.NEUTRAL;
   health: number;
@@ -311,14 +314,14 @@ export class Vehicle {
 
   createPhysicsBody(world: RAPIER.World): void {
     this.world = world;
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    const bodyDesc = this.rapier.RigidBodyDesc.dynamic()
       .setTranslation(this.mesh.position.x, this.mesh.position.y, this.mesh.position.z)
       .setLinearDamping(0.5)
       .setAngularDamping(0.5);
 
     this.body = world.createRigidBody(bodyDesc);
 
-    const colliderDesc = RAPIER.ColliderDesc.cuboid(
+    const colliderDesc = this.rapier.ColliderDesc.cuboid(
       this.config.dimensions.width / 2,
       this.config.dimensions.height / 2,
       this.config.dimensions.length / 2
@@ -335,7 +338,7 @@ export class Vehicle {
   /** 向下射线探测地面高度（排除自身碰撞体） */
   private raycastGround(x: number, y: number, z: number, maxDistance = 6): GroundProbeResult {
     if (!this.world) return { hit: false, groundY: y - 0.5 };
-    const ray = new RAPIER.Ray(new RAPIER.Vector3(x, y + 0.5, z), new RAPIER.Vector3(0, -1, 0));
+    const ray = new this.rapier.Ray(new this.rapier.Vector3(x, y + 0.5, z), new this.rapier.Vector3(0, -1, 0));
     const hit = this.world.castRay(ray, maxDistance, true, undefined, undefined, this.collider ?? undefined, this.body ?? undefined);
     if (!hit) return { hit: false, groundY: y - 0.5 };
     return { hit: true, groundY: y + 0.5 - hit.timeOfImpact };
@@ -355,11 +358,11 @@ export class Vehicle {
     if (probe.hit) {
       const targetY = probe.groundY + 0.35;
       if (pos.y < targetY - 0.02) {
-        this.body.setTranslation(new RAPIER.Vector3(pos.x, targetY, pos.z), true);
+        this.body.setTranslation(new this.rapier.Vector3(pos.x, targetY, pos.z), true);
       }
       const vel = this.body.linvel();
       if (vel.y < -0.5) {
-        this.body.setLinvel(new RAPIER.Vector3(vel.x, 0, vel.z), true);
+        this.body.setLinvel(new this.rapier.Vector3(vel.x, 0, vel.z), true);
       }
     }
 
@@ -369,9 +372,9 @@ export class Vehicle {
     const euler = new THREE.Euler().setFromQuaternion(q);
     if (Math.abs(euler.x) > 0.35 || Math.abs(euler.z) > 0.35) {
       const yawOnly = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), euler.y);
-      this.body.setRotation(new RAPIER.Quaternion(yawOnly.x, yawOnly.y, yawOnly.z, yawOnly.w), true);
+      this.body.setRotation(new this.rapier.Quaternion(yawOnly.x, yawOnly.y, yawOnly.z, yawOnly.w), true);
       const ang = this.body.angvel();
-      this.body.setAngvel(new RAPIER.Vector3(0, ang.y, 0), true);
+      this.body.setAngvel(new this.rapier.Vector3(0, ang.y, 0), true);
     }
 
     // 横向速度钳制：把速度分解为前向/横向，横向强阻尼
@@ -384,7 +387,7 @@ export class Vehicle {
     const lateral = v.clone().addScaledVector(forward, -forwardSpeed);
     if (lateral.lengthSq() > 1) {
       const damped = v.addScaledVector(lateral, -0.08);
-      this.body.setLinvel(new RAPIER.Vector3(damped.x, damped.y, damped.z), true);
+      this.body.setLinvel(new this.rapier.Vector3(damped.x, damped.y, damped.z), true);
     }
 
     // 同步 mesh
@@ -428,14 +431,14 @@ export class Vehicle {
     if (Math.abs(forwardSpeed) < this.currentMaxSpeed) {
       const force = forward * this.config.acceleration * this.config.mass * Math.min(1, deltaTime * 2);
       this.body.applyImpulse(
-        new RAPIER.Vector3(forwardVec.x * force, 0, forwardVec.z * force),
+        new this.rapier.Vector3(forwardVec.x * force, 0, forwardVec.z * force),
         true,
       );
     }
 
     if (Math.abs(turn) > 0.1) {
       const torque = turn * this.currentTurnSpeed * this.config.mass * Math.min(1, deltaTime * 2);
-      this.body.applyTorqueImpulse(new RAPIER.Vector3(0, torque, 0), true);
+      this.body.applyTorqueImpulse(new this.rapier.Vector3(0, torque, 0), true);
     }
   }
 
@@ -654,12 +657,12 @@ export class Vehicle {
     if (this.body) {
       this.body.setEnabled(true);
       this.body.setTranslation(
-        new RAPIER.Vector3(this.spawnPosition.x, this.spawnPosition.y, this.spawnPosition.z),
+        new this.rapier.Vector3(this.spawnPosition.x, this.spawnPosition.y, this.spawnPosition.z),
         true,
       );
-      this.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
-      this.body.setLinvel(new RAPIER.Vector3(0, 0, 0), true);
-      this.body.setAngvel(new RAPIER.Vector3(0, 0, 0), true);
+      this.body.setRotation(new this.rapier.Quaternion(0, 0, 0, 1), true);
+      this.body.setLinvel(new this.rapier.Vector3(0, 0, 0), true);
+      this.body.setAngvel(new this.rapier.Vector3(0, 0, 0), true);
     }
     this.turretYaw = 0;
     this.turretTargetYaw = 0;

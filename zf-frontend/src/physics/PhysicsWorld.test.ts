@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import RAPIER from '@dimforge/rapier3d-compat';
+import { ensureRapierLoaded } from './PhysicsLoader';
 import { PhysicsWorld } from './PhysicsWorld';
 
 describe('PhysicsWorld', () => {
   beforeAll(async () => {
-    await RAPIER.init();
+    await ensureRapierLoaded();
   });
 
   it('applies the explicit fixed timestep to Rapier', () => {

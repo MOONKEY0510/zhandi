@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { getRapier, type RapierModule } from './PhysicsLoader';
 
 export enum ColliderType {
   STATIC = 'static',
@@ -23,9 +24,11 @@ export class CollisionSystem {
   world: RAPIER.World;
   colliders: Map<string, { body: RAPIER.RigidBody; collider: RAPIER.Collider }> = new Map();
   triggerEvents: Map<string, Set<string>> = new Map();
+  private readonly rapier: RapierModule;
 
-  constructor(world: RAPIER.World) {
+  constructor(world: RAPIER.World, rapier: RapierModule = getRapier()) {
     this.world = world;
+    this.rapier = rapier;
   }
 
   createCollider(id: string, config: ColliderConfig): void {
@@ -33,13 +36,13 @@ export class CollisionSystem {
 
     switch (config.type) {
       case ColliderType.STATIC:
-        bodyDesc = RAPIER.RigidBodyDesc.fixed();
+        bodyDesc = this.rapier.RigidBodyDesc.fixed();
         break;
       case ColliderType.DYNAMIC:
-        bodyDesc = RAPIER.RigidBodyDesc.dynamic();
+        bodyDesc = this.rapier.RigidBodyDesc.dynamic();
         break;
       case ColliderType.TRIGGER:
-        bodyDesc = RAPIER.RigidBodyDesc.fixed();
+        bodyDesc = this.rapier.RigidBodyDesc.fixed();
         break;
     }
 
@@ -57,16 +60,16 @@ export class CollisionSystem {
     let colliderDesc: RAPIER.ColliderDesc;
     switch (config.shape) {
       case 'box':
-        colliderDesc = RAPIER.ColliderDesc.cuboid(config.size.x / 2, config.size.y / 2, config.size.z / 2);
+        colliderDesc = this.rapier.ColliderDesc.cuboid(config.size.x / 2, config.size.y / 2, config.size.z / 2);
         break;
       case 'sphere':
-        colliderDesc = RAPIER.ColliderDesc.ball(config.size.x);
+        colliderDesc = this.rapier.ColliderDesc.ball(config.size.x);
         break;
       case 'capsule':
-        colliderDesc = RAPIER.ColliderDesc.capsule(config.size.y / 2, config.size.x);
+        colliderDesc = this.rapier.ColliderDesc.capsule(config.size.y / 2, config.size.x);
         break;
       case 'cylinder':
-        colliderDesc = RAPIER.ColliderDesc.cylinder(config.size.y / 2, config.size.x);
+        colliderDesc = this.rapier.ColliderDesc.cylinder(config.size.y / 2, config.size.x);
         break;
     }
 
@@ -112,14 +115,14 @@ export class CollisionSystem {
   setColliderPosition(id: string, position: { x: number; y: number; z: number }): void {
     const collider = this.colliders.get(id);
     if (collider) {
-      collider.body.setTranslation(new RAPIER.Vector3(position.x, position.y, position.z), true);
+      collider.body.setTranslation(new this.rapier.Vector3(position.x, position.y, position.z), true);
     }
   }
 
   castRay(origin: { x: number; y: number; z: number }, direction: { x: number; y: number; z: number }, maxDistance: number): { hit: boolean; point?: { x: number; y: number; z: number }; distance?: number } {
-    const ray = new RAPIER.Ray(
-      new RAPIER.Vector3(origin.x, origin.y, origin.z),
-      new RAPIER.Vector3(direction.x, direction.y, direction.z)
+    const ray = new this.rapier.Ray(
+      new this.rapier.Vector3(origin.x, origin.y, origin.z),
+      new this.rapier.Vector3(direction.x, direction.y, direction.z)
     );
 
     const hit = this.world.castRay(ray, maxDistance, true);

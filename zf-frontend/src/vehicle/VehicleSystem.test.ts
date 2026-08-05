@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
+import { ensureRapierLoaded, getRapier } from '../physics/PhysicsLoader';
 import { TeamId } from '../game/ConquestMode';
 import { Vehicle, VehicleSystem, VehicleType, VehicleDamagePart } from './VehicleSystem';
 
 describe('VehicleSystem（阶段 7 载具 P0）', () => {
   beforeAll(async () => {
-    await RAPIER.init();
+    await ensureRapierLoaded();
   });
 
   function createVehicle(type: VehicleType = VehicleType.JEEP) {
     const scene = new THREE.Scene();
-    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    const world = new (getRapier()).World({ x: 0, y: -9.81, z: 0 });
     const vehicle = new Vehicle(scene, type, new THREE.Vector3(0, 1, 0));
     vehicle.createPhysicsBody(world);
     return { scene, world, vehicle };

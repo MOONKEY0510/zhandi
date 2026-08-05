@@ -1,4 +1,5 @@
-import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { ensureRapierLoaded, getRapier, type RapierModule } from './PhysicsLoader';
 
 export interface GroundProbe {
   grounded: boolean;
@@ -11,14 +12,16 @@ export class PhysicsWorld {
   world: RAPIER.World;
   gravity = { x: 0, y: -9.81, z: 0 };
   bodies: Map<string, { rigidBody: RAPIER.RigidBody; collider: RAPIER.Collider }> = new Map();
+  private readonly rapier: RapierModule;
 
-  constructor() {
-    this.world = new RAPIER.World(this.gravity);
+  constructor(rapier: RapierModule = getRapier()) {
+    this.rapier = rapier;
+    this.world = new rapier.World(this.gravity);
   }
 
   static async init(): Promise<PhysicsWorld> {
-    await RAPIER.init();
-    return new PhysicsWorld();
+    const rapier = await ensureRapierLoaded();
+    return new PhysicsWorld(rapier);
   }
 
   createCapsule(
@@ -28,13 +31,13 @@ export class PhysicsWorld {
     position: { x: number; y: number; z: number },
     mass = 1.0
   ): RAPIER.RigidBody {
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    const bodyDesc = this.rapier.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
       .setLinearDamping(0.5)
       .setAngularDamping(0.5);
 
     const rigidBody = this.world.createRigidBody(bodyDesc);
-    const colliderDesc = RAPIER.ColliderDesc.capsule(halfHeight, radius)
+    const colliderDesc = this.rapier.ColliderDesc.capsule(halfHeight, radius)
       .setMass(mass)
       .setFriction(0.5)
       .setRestitution(0.0);
@@ -45,9 +48,9 @@ export class PhysicsWorld {
   }
 
   createGround(size: number): void {
-    const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, -size / 2, 0);
+    const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(0, -size / 2, 0);
     const rigidBody = this.world.createRigidBody(bodyDesc);
-    const colliderDesc = RAPIER.ColliderDesc.cuboid(size / 2, size / 2, size / 2)
+    const colliderDesc = this.rapier.ColliderDesc.cuboid(size / 2, size / 2, size / 2)
       .setFriction(0.8)
       .setRestitution(0.1);
     this.world.createCollider(colliderDesc, rigidBody);
@@ -61,7 +64,7 @@ export class PhysicsWorld {
   resizeCapsule(id: string, radius: number, halfHeight: number): void {
     const body = this.bodies.get(id);
     if (!body) return;
-    body.collider.setShape(new RAPIER.Capsule(halfHeight, radius));
+    body.collider.setShape(new this.rapier.Capsule(halfHeight, radius));
   }
 
   canResizeCapsule(id: string, radius: number, halfHeight: number, centerOffsetY: number): boolean {
@@ -70,9 +73,9 @@ export class PhysicsWorld {
     this.world.propagateModifiedBodyPositionsToColliders();
     const position = body.rigidBody.translation();
     const hit = this.world.intersectionWithShape(
-      new RAPIER.Vector3(position.x, position.y + centerOffsetY, position.z),
-      new RAPIER.Quaternion(0, 0, 0, 1),
-      new RAPIER.Capsule(halfHeight, radius),
+      new this.rapier.Vector3(position.x, position.y + centerOffsetY, position.z),
+      new this.rapier.Quaternion(0, 0, 0, 1),
+      new this.rapier.Capsule(halfHeight, radius),
       undefined,
       undefined,
       body.collider,
@@ -89,9 +92,9 @@ export class PhysicsWorld {
 
     this.world.propagateModifiedBodyPositionsToColliders();
     const position = body.rigidBody.translation();
-    const ray = new RAPIER.Ray(
-      new RAPIER.Vector3(position.x, position.y, position.z),
-      new RAPIER.Vector3(0, -1, 0),
+    const ray = new this.rapier.Ray(
+      new this.rapier.Vector3(position.x, position.y, position.z),
+      new this.rapier.Vector3(0, -1, 0),
     );
     const hit = this.world.castRayAndGetNormal(
       ray,
@@ -127,21 +130,21 @@ export class PhysicsWorld {
   setBodyPosition(id: string, pos: { x: number; y: number; z: number }): void {
     const body = this.bodies.get(id);
     if (body) {
-      body.rigidBody.setTranslation(new RAPIER.Vector3(pos.x, pos.y, pos.z), true);
+      body.rigidBody.setTranslation(new this.rapier.Vector3(pos.x, pos.y, pos.z), true);
     }
   }
 
   applyImpulse(id: string, impulse: { x: number; y: number; z: number }): void {
     const body = this.bodies.get(id);
     if (body) {
-      body.rigidBody.applyImpulse(new RAPIER.Vector3(impulse.x, impulse.y, impulse.z), true);
+      body.rigidBody.applyImpulse(new this.rapier.Vector3(impulse.x, impulse.y, impulse.z), true);
     }
   }
 
   setBodyLinearVelocity(id: string, velocity: { x: number; y: number; z: number }): void {
     const body = this.bodies.get(id);
     if (body) {
-      body.rigidBody.setLinvel(new RAPIER.Vector3(velocity.x, velocity.y, velocity.z), true);
+      body.rigidBody.setLinvel(new this.rapier.Vector3(velocity.x, velocity.y, velocity.z), true);
     }
   }
 
