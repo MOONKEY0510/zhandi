@@ -67,6 +67,23 @@ describe('ProjectileSim（阶段 8 服务端命中裁决）', () => {
     expect(sim.stats.hits).toBe(0);
   });
 
+  it('大型目标（载具）：radius 放大命中判定（偏移 > 玩家半径但 < 载具半径仍命中）', () => {
+    const sim = new ProjectileSim();
+    shootForward(sim, 'p1', 0, 0, 0, 0);
+    // 坦克 hitRadius=2.5：横向偏移 1.5m（> BULLET_HIT_RADIUS 0.6 但 < 2.5）
+    const tank = { ...target('v1', 1, 5, 0), radius: 2.5 };
+    let hits = 0;
+    for (let i = 0; i < 200; i++) hits += sim.step(DT, [tank]).length;
+    expect(hits).toBe(1);
+    expect(sim.stats.hits).toBe(1);
+    // 偏移 3m（> 2.5）→ 不命中
+    const sim2 = new ProjectileSim();
+    shootForward(sim2, 'p1', 0, 0, 0, 0);
+    const farTank = { ...target('v1', 1, 5, 3), radius: 2.5 };
+    for (let i = 0; i < 200; i++) sim2.step(DT, [farTank]);
+    expect(sim2.stats.hits).toBe(0);
+  });
+
   it('射程外目标不命中（弹丸射程到期）', () => {
     const sim = new ProjectileSim();
     shootForward(sim);

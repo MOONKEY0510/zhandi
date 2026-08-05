@@ -22,6 +22,8 @@ export interface ProjectileTarget {
   y: number;
   z: number;
   alive: boolean;
+  /** 命中判定半径 m（默认 BULLET_HIT_RADIUS；载具等大型目标用更大的半径） */
+  radius?: number;
 }
 
 export interface ServerProjectile {
@@ -134,7 +136,8 @@ export class ProjectileSim {
         // 命中判定：活着的敌方目标，水平距离 ≤ 命中半径 且 垂直偏差 ≤ 半高
         for (const t of targets) {
           if (t.id === p.ownerId || t.team === p.team || !t.alive) continue;
-          if (Math.hypot(p.x - t.x, p.z - t.z) <= BULLET_HIT_RADIUS && Math.abs(p.y - t.y) <= BULLET_HEIGHT_HALF) {
+          const hitRadius = t.radius ?? BULLET_HIT_RADIUS;
+          if (Math.hypot(p.x - t.x, p.z - t.z) <= hitRadius && Math.abs(p.y - t.y) <= BULLET_HEIGHT_HALF) {
             hit = {
               projectileId: p.id,
               ownerId: p.ownerId,

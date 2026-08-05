@@ -53,6 +53,7 @@ export type MessageKind =
   | 'vehicle_enter'
   | 'vehicle_exit'
   | 'vehicle_drive'
+  | 'vehicle_fire'
   | 'ping'
   | 'pong'
   | 'error';
@@ -184,6 +185,60 @@ export const VEHICLE_SPAWN_DEFS = [
 
 export type VehicleSpawnDef = (typeof VEHICLE_SPAWN_DEFS)[number];
 
+/** 载具武器定义（服务端裁决冷却/伤害/弹道；客户端按 cooldownMs 节流发送开火请求） */
+export interface VehicleWeaponDef {
+  /** 武器类型（决定弹道观感；cannon 主炮 / mg 机枪） */
+  kind: 'cannon' | 'mg';
+  /** 单发伤害（命中后由服务器扣减载具/玩家血量） */
+  damage: number;
+  /** 弹速 m/s */
+  speedMps: number;
+  /** 最大射程 m */
+  maxRange: number;
+  /** 弹丸寿命 ms */
+  lifeMs: number;
+  /** 装填冷却 ms（客户端据此节流，服务端权威裁决） */
+  cooldownMs: number;
+}
+
+/** 服务端载具模拟配置（与客户端单机 VehicleConfig 量级对齐） */
+export interface VehicleSimConfig {
+  /** 显示名（HUD 载具血条用） */
+  label: string;
+  maxSpeed: number;
+  acceleration: number;
+  turnSpeed: number;
+  health: number;
+  /** 命中判定半径 m（弹道对载具的圆柱相交半径，比玩家大） */
+  hitRadius: number;
+  /** 武器列表（索引 = weaponIndex，0 为主武器） */
+  weapons: VehicleWeaponDef[];
+}
+
+/** 服务端权威载具配置（shared 同源：服务端裁决 + 客户端节流/开火反馈共用） */
+export const VEHICLE_SIM_CONFIGS: Record<VehicleTypeNet, VehicleSimConfig> = {
+  // 吉普：机枪（与单机 14 伤/200 射程一致），机动快
+  0: {
+    label: '吉普车', maxSpeed: 30, acceleration: 8, turnSpeed: 2, health: 200, hitRadius: 1.6,
+    weapons: [{ kind: 'mg', damage: 14, speedMps: 140, maxRange: 200, lifeMs: 1500, cooldownMs: 140 }],
+  },
+  // 坦克：主炮（与单机 120 伤/500 射程一致），高血量慢速
+  1: {
+    label: '坦克', maxSpeed: 15, acceleration: 3, turnSpeed: 1, health: 500, hitRadius: 2.5,
+    weapons: [{ kind: 'cannon', damage: 120, speedMps: 60, maxRange: 500, lifeMs: 3000, cooldownMs: 1800 }],
+  },
+  // 卡车：无武器（运输）
+  2: {
+    label: '卡车', maxSpeed: 20, acceleration: 4, turnSpeed: 1.5, health: 300, hitRadius: 2,
+    weapons: [],
+  },
+  // 摩托：无武器（机动侦察）
+  3: {
+    label: '摩托车', maxSpeed: 40, acceleration: 12, turnSpeed: 3, health: 80, hitRadius: 1,
+    weapons: [],
+  },
+};
+
 /** 载具状态条目（服务端广播，客户端渲染/插值用） */
 export interface VehicleStateEntry {
   id: string;
@@ -227,6 +282,17 @@ export interface VehicleDrive {
   forward: number;
   /** 转向输入 -1..1（1 = 右转） */
   turn: number;
+}
+
+/** 客户端载具开火（仅司机生效；服务端裁决冷却/伤害并生成弹丸） */
+export interface VehicleFire {
+  kind: 'vehicle_fire';
+  vehicleId: string;
+  /** 弹道方向（世界坐标系，与服务端弹丸 yaw/pitch 一致） */
+  aimYaw: number;
+  aimPitch: number;
+  /** 武器索引（默认 0 = 主武器；无武器载具请求会被服务端忽略） */
+  weaponIndex: number;
 }
 
 /** 服务端权威游戏状态（阶段 8：征服规则权威化第一步，~2Hz 广播） */
@@ -285,6 +351,7 @@ export type NetworkMessage =
   | VehicleEnter
   | VehicleExit
   | VehicleDrive
+  | VehicleFire
   | Ping
   | Pong
   | ErrorMsg;

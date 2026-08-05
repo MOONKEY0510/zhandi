@@ -145,6 +145,7 @@ describe('服务端权威游戏状态（阶段 8 征服规则端到端）', () =
     // shooter 取队 0，target 取队 1（出生点：队 0 = (-20,-20)，队 1 = (20,20)）
     const shooterIsA = ackA.team === 0;
     const shooter = shooterIsA ? a : b;
+    const target = shooterIsA ? b : a;
     const shooterTeam = shooterIsA ? ackA.team : ackB.team;
     const targetTeam = shooterIsA ? ackB.team : ackA.team;
 
@@ -153,13 +154,22 @@ describe('服务端权威游戏状态（阶段 8 征服规则端到端）', () =
     const sz = sx;
     const tx = spawnX(targetTeam);
     const tz = tx;
-    const dx = tx - sx;
-    const dz = tz - sz;
-    const dist = Math.hypot(dx, dz);
+
+    // target 沿 -z 走位 2.8s（≈14.6m）→ 偏离 v1/v2 对角线（载具会挡弹，阶段 8 第十六批起载具为弹道目标）
+    const walkStart = performance.now();
+    while (performance.now() - walkStart < 2800) {
+      target.sendInput({ ...IDLE_INPUT, moveForward: true });
+      await sleep(30);
+    }
+    await sleep(200);
+    const nt = { x: tx, z: tz - 2.8 * 5.2 };
+    const ndx = nt.x - sx;
+    const ndz = nt.z - sz;
+    const ndist = Math.hypot(ndx, ndz);
     // 服务端 forward = (sin(yaw), -cos(yaw))；pitch 下压使弹道在目标躯干高度穿过：
     // 飞行时间 t = dist/speed，垂直位移 Δy = -1.1m，sin(pitch) = Δy / dist
-    const yaw = Math.atan2(dx, -dz);
-    const pitch = Math.asin((0.5 - 1.6) / dist);
+    const yaw = Math.atan2(ndx, -ndz);
+    const pitch = Math.asin((0.5 - 1.6) / ndist);
 
     // 连射 3.5 秒（弹道飞行 ~0.94s，4 发击杀 → 余量充足）
     const start = performance.now();

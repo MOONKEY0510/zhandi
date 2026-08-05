@@ -17,6 +17,7 @@ import {
   type JoinAck,
   type Snapshot,
   type VehicleDrive,
+  type VehicleFire,
 } from '../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../shared/codec.ts';
 import { computeVisiblePlayers } from '../shared/interest.ts';
@@ -240,6 +241,11 @@ export class ServerApp {
         return;
       }
 
+      case 'vehicle_fire': {
+        this.handleVehicleFire(conn, msg);
+        return;
+      }
+
       case 'ping': {
         conn.lastPingClientTime = msg.clientTime;
         this.send(conn.ws, { kind: 'pong', clientTime: msg.clientTime, serverTime: this.clock.nowMs() });
@@ -322,6 +328,33 @@ export class ServerApp {
     };
   }
 
+  /**
+   * 载具开火：服务端裁决司机/武器/冷却 → 生成弹丸（复用玩家弹道裁决管线，
+   * 弹丸 ownerId = 司机，命中敌方玩家同样走击杀/兵力扣减）。
+   */
+  private handleVehicleFire(conn: Connection, msg: VehicleFire): void {
+    const room = conn.roomId ? this.roomManager.getRoom(conn.roomId) : null;
+    if (!conn.playerId || !conn.sim || !room?.vehicles) return;
+    const yaw = Number.isFinite(msg.aimYaw) ? msg.aimYaw : 0;
+    const pitch = Number.isFinite(msg.aimPitch) ? msg.aimPitch : 0;
+    const weaponIndex = Number.isInteger(msg.weaponIndex) ? Math.max(0, Math.min(3, msg.weaponIndex)) : 0;
+    const result = room.vehicles.fire(msg.vehicleId, conn.playerId, yaw, pitch, this.clock.nowMs(), weaponIndex);
+    if (!result) return;
+    this.projectiles.spawn({
+      ownerId: conn.playerId,
+      team: conn.sim.state.team,
+      x: result.x,
+      y: result.y,
+      z: result.z,
+      yaw,
+      pitch,
+      speedMps: result.speedMps,
+      damage: result.damage,
+      maxRange: result.maxRange,
+      lifeMs: result.lifeMs,
+    });
+  }
+
   /** 每 tick：把最新输入应用到玩家模拟，推进弹道并裁决命中 */
   private stepSimulation(tick: number, deltaSeconds: number, shouldSnapshot: boolean): void {
     // 快照广播前应用输入（输入在上一 tick 到达，本 tick 生效；乱序缓冲按 seq 顺序消费）
@@ -372,7 +405,30 @@ export class ServerApp {
       const s = conn.sim.state;
       targets.push({ id: s.id, team: s.team, x: s.x, y: s.y, z: s.z, alive: s.alive });
     }
+    // 载具作为弹道目标：命中半径按车型（大型目标更易命中），摧毁 → 司机被清空（vehicle_state 广播驱动客户端被动退出）
+    for (const room of this.roomManager.listRooms()) {
+      if (!room.vehicles) continue;
+      for (const v of room.vehicles.list()) {
+        if (v.destroyed) continue;
+        targets.push({
+          id: v.id,
+          team: v.team as 0 | 1,
+          x: v.x,
+          y: 0.8,
+          z: v.z,
+          alive: true,
+          radius: v.hitRadius,
+        });
+      }
+    }
     this.projectiles.step(deltaSeconds, targets, (hit) => {
+      // 命中载具（id 形如 v1/v2）：扣血 → 摧毁（清空司机 + 重生计时）
+      for (const room of this.roomManager.listRooms()) {
+        if (room.vehicles?.getVehicle(hit.targetId)) {
+          room.vehicles.takeDamage(hit.targetId, hit.damage);
+          return;
+        }
+      }
       const targetConn = this.findConnection(hit.targetId);
       if (targetConn?.sim) {
         const wasAlive = targetConn.sim.state.alive;

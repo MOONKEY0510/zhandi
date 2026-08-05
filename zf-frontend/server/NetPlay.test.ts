@@ -195,8 +195,7 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
     sim.dispose();
   }, 15000);
 
-  it('快照 ackSeq 生效：服务端确认并应用输入后，客户端预测缓冲被清理', async () => {
-    // A 挂本地预测（初始 = 队 0 出生点 (-20,-20)）
+  it('快照 ackSeq 生效：服务端确认并应用输入后，客户端预测缓冲被清理', async () => {    // A 挂本地预测（初始 = 队 0 出生点 (-20,-20)）
     const prediction = new ClientPrediction({ x: -20, y: 0, z: -20, yaw: 0, pitch: 0, health: 100, alive: true });
     const a = makeClient('a5', { prediction, pingIntervalMs: 0 });
     const ackedCounts: number[] = [];
@@ -222,4 +221,83 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
     const final = prediction.state;
     expect(Math.hypot(final.x - -20, final.z - -20)).toBeGreaterThan(1);
   }, 15000);
+
+  it('载具武器闭环：A 驾驶吉普（队0）朝 B（队1）开火 → B 血量下降（载具机枪命中玩家）', async () => {
+    const a = makeClient('vfire-a');
+    const b = makeClient('vfire-b');
+    const bHealths: number[] = [];
+    b.onSnapshot = (players) => {
+      const me = players.get('vfire-b');
+      if (me) bHealths.push(me.health);
+    };
+
+    await a.connect();
+    await b.connect();
+    a.joinRoom('netplay');
+    b.joinRoom('netplay');
+    await sleep(300);
+
+    // B（出生 20,20）沿 -z 直行 3.9s（20.3m）→ (20,-0.3)，避开 v1→v2 对角线（v2 会挡弹道）
+    const mvStart = performance.now();
+    while (performance.now() - mvStart < 3900) {
+      b.sendInput({ ...IDLE_INPUT, moveForward: true });
+      await sleep(30);
+    }
+    await sleep(200);
+
+    // A 上 v1（吉普，队0，位于 -16,-16；A 出生点 -20,-20 距其 5.7m < 8m）
+    a.sendVehicleEnter('v1');
+    await sleep(300);
+
+    // 朝 B 位置 (20,-0.3) 射击：yaw = atan2(36, -15.7) ≈ 1.984；±0.05 扇形扫射覆盖移动误差
+    const yaw = Math.atan2(36, -15.7);
+    for (let pass = 0; pass < 3; pass += 1) {
+      const dy = (pass - 1) * 0.05;
+      for (let i = 0; i < 8; i += 1) {
+        a.sendVehicleFire('v1', yaw + dy, 0, 0);
+        await sleep(160); // > 机枪冷却 140ms
+      }
+    }
+    await sleep(500);
+
+    expect(bHealths.some((h) => h < 100)).toBe(true); // 载具机枪打中 B 掉血
+    // 释放 v1 司机位（供后续用例复用）
+    a.sendVehicleExit();
+    await sleep(200);
+  }, 20000);
+
+  it('载具武器闭环：B 坦克主炮摧毁 A 的吉普 → A 被清出司机位（vehicle_state 权威广播）', async () => {
+    const a = makeClient('vkill-a');
+    const b = makeClient('vkill-b');
+    const v1States: { destroyed: boolean; driverId: string | null }[] = [];
+    a.onVehicleState = (state) => {
+      const v1 = state.vehicles.find((v) => v.id === 'v1');
+      if (v1) v1States.push({ destroyed: v1.destroyed, driverId: v1.driverId });
+    };
+
+    await a.connect();
+    await b.connect();
+    a.joinRoom('netplay');
+    b.joinRoom('netplay');
+    await sleep(300);
+
+    // A 上 v1（吉普 200 血），B 上 v2（坦克 主炮 120 伤，位于 16,16；B 出生点 20,20 距其 5.7m）
+    a.sendVehicleEnter('v1');
+    b.sendVehicleEnter('v2');
+    await sleep(300);
+
+    // 从 v2(16,16) 朝 v1(-16,-16)：方向 yaw = atan2(-32, 32) = -π/4
+    const yaw = Math.atan2(-32, 32);
+    b.sendVehicleFire('v2', yaw, 0, 0); // 第 1 炮：200 - 120 = 80
+    await sleep(2100); // > 坦克主炮冷却 1800ms
+    b.sendVehicleFire('v2', yaw, 0, 0); // 第 2 炮：摧毁
+    await sleep(800);
+
+    const last = v1States[v1States.length - 1];
+    expect(last).toBeDefined();
+    expect(last.destroyed).toBe(true); // 吉普被坦克主炮摧毁
+    expect(last.driverId).toBeNull(); // A 被清出司机位（被动下车）
+    // 中途应观察到健康状态（第 1 炮后 health 80 → 未摧毁）
+    expect(v1States.some((s) => !s.destroyed)).toBe(true);
+  }, 20000);
 });

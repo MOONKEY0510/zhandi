@@ -276,6 +276,12 @@ export class NetClient {
     this.send({ kind: 'vehicle_drive', forward, turn });
   }
 
+  /** 载具开火（仅司机生效；服务端裁决冷却/伤害并生成弹丸） */
+  sendVehicleFire(vehicleId: string, aimYaw: number, aimPitch: number, weaponIndex = 0): void {
+    if (!this.connected) return;
+    this.send({ kind: 'vehicle_fire', vehicleId, aimYaw, aimPitch, weaponIndex });
+  }
+
   getStats(): NetClientStats {
     const sorted = [...this.rttSamples].sort((a, b) => a - b);
     const rtt = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : null;

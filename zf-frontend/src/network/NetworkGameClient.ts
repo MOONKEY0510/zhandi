@@ -112,6 +112,11 @@ export class NetworkGameClient {
     this.client?.sendVehicleDrive(forward, turn);
   }
 
+  /** 载具开火（仅司机生效；服务端裁决冷却/伤害） */
+  sendVehicleFire(vehicleId: string, aimYaw: number, aimPitch: number, weaponIndex = 0): void {
+    this.client?.sendVehicleFire(vehicleId, aimYaw, aimPitch, weaponIndex);
+  }
+
   getStats(): NetClientStats | null {
     return this.client?.getStats() ?? null;
   }

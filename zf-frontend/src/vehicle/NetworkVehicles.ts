@@ -29,6 +29,9 @@ interface NetVehicle {
   type: VehicleTypeNet;
   mesh: THREE.Group;
   bodyMat: THREE.MeshStandardMaterial;
+  /** 炮口闪光（本地开火反馈；visible 由 flashUntil 控制） */
+  flashMesh: THREE.Mesh;
+  flashUntil: number;
   driverId: string | null;
   destroyed: boolean;
   team: 0 | 1 | 2;
@@ -80,8 +83,8 @@ export class NetworkVehicles {
     }
   }
 
-  /** 每帧平滑插值到服务端目标（渲染层调用） */
-  update(dt: number): void {
+  /** 每帧平滑插值到服务端目标（渲染层调用）；nowMs 驱动炮口闪光衰减 */
+  update(dt: number, nowMs: number): void {
     const k = 1 - Math.exp(-LERP_GAIN * dt);
     for (const v of this.vehicles.values()) {
       v.x += (v.tx - v.x) * k;
@@ -89,6 +92,14 @@ export class NetworkVehicles {
       v.yaw += normalizeAngle(v.tyaw - v.yaw) * k;
       v.mesh.position.set(v.x, 0.6, v.z);
       v.mesh.rotation.y = v.yaw;
+      // 炮口闪光：开火后 120ms 内可见，随后淡出
+      const remaining = v.flashUntil - nowMs;
+      v.flashMesh.visible = remaining > 0;
+      if (remaining > 0) {
+        const t = Math.min(1, remaining / 120);
+        v.flashMesh.scale.setScalar(0.5 + 1.5 * t);
+        (v.flashMesh.material as THREE.MeshBasicMaterial).opacity = t;
+      }
     }
   }
 
@@ -115,13 +126,27 @@ export class NetworkVehicles {
   }
 
   /** 本人驾驶的载具（driverId 匹配） */
-  getByDriver(driverId: string): { id: string; mesh: THREE.Group; destroyed: boolean } | null {
+  getByDriver(driverId: string): {
+    id: string;
+    type: VehicleTypeNet;
+    mesh: THREE.Group;
+    destroyed: boolean;
+    health: number;
+    maxHealth: number;
+  } | null {
     for (const v of this.vehicles.values()) {
       if (v.driverId === driverId) {
-        return { id: v.id, mesh: v.mesh, destroyed: v.destroyed };
+        return { id: v.id, type: v.type, mesh: v.mesh, destroyed: v.destroyed, health: v.health, maxHealth: v.maxHealth };
       }
     }
     return null;
+  }
+
+  /** 本地开火反馈：点亮炮口闪光（服务端裁决伤害，此处仅观感） */
+  flash(vehicleId: string, nowMs: number): void {
+    const v = this.vehicles.get(vehicleId);
+    if (!v) return;
+    v.flashUntil = nowMs + 120;
   }
 
   /** 断线/退出对局时清空全部视觉 */
@@ -143,11 +168,21 @@ export class NetworkVehicles {
     const bodyMat = group.userData.bodyMat as THREE.MeshStandardMaterial;
     // 首次创建即按归属/摧毁状态上色（updateTarget 只在变化时改色）
     bodyMat.color.setHex(entry.destroyed ? DESTROYED_COLOR : TEAM_COLORS[entry.team] ?? TEAM_COLORS[2]);
+    const flashMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffcc66, transparent: true, opacity: 0 }),
+    );
+    flashMesh.visible = false;
+    // 炮口位置：车头前方（局部坐标前向 -z 方向延长）
+    flashMesh.position.set(0, 0.7, -0.9);
+    group.add(flashMesh);
     return {
       id: entry.id,
       type: entry.type,
       mesh: group,
       bodyMat,
+      flashMesh,
+      flashUntil: 0,
       driverId: entry.driverId,
       destroyed: entry.destroyed,
       team: entry.team,

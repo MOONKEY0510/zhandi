@@ -12,6 +12,7 @@ import {
   type VehicleEnter,
   type VehicleExit,
   type VehicleDrive,
+  type VehicleFire,
 } from './protocol.ts';
 
 function roundTrip<T extends NetworkMessage>(msg: T): T {
@@ -167,5 +168,10 @@ describe('codec（阶段 8 二进制协议）', () => {
     expect(roundTrip(enter)).toEqual(enter);
     expect(roundTrip(exit)).toEqual(exit);
     expect(roundTrip(drive)).toEqual(drive);
+  });
+
+  it('vehicle_fire 往返一致（方向/武器索引）', () => {
+    const fire: VehicleFire = { kind: 'vehicle_fire', vehicleId: 'v2', aimYaw: 0.5, aimPitch: -0.25, weaponIndex: 0 };
+    expect(roundTrip(fire)).toEqual(fire);
   });
 });

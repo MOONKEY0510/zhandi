@@ -26,6 +26,7 @@ import { AISystem, AIBot } from '../ai/AIBot';
 import { AIStats } from '../ai/AIStats';
 import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { NetworkVehicles } from '../vehicle/NetworkVehicles';
+import { VEHICLE_SIM_CONFIGS } from '../../shared/protocol';
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
@@ -168,6 +169,8 @@ export class GameScene {
   private networkVehicles: NetworkVehicles | null = null;
   /** 联网模式驾驶状态（由服务端 driverId 驱动，非本地立即置位） */
   private inNetworkVehicle = false;
+  /** 联网载具开火节流（客户端按武器冷却限制发送频率；伤害/冷却由服务端权威裁决） */
+  private lastVehicleFireSent = Number.NEGATIVE_INFINITY;
 
   // 载具炮弹实体（阶段 6/7：弹道 + 爆炸闭环）
   private vehicleProjectiles: VehicleProjectile[] = [];
@@ -1401,6 +1404,8 @@ export class GameScene {
         this.inNetworkVehicle = true;
         this.hud.addKillMessage('进入载具（驾驶）', this.simulationTimeMs);
       }
+      // 载具血量条（服务端 vehicle_state 权威血量）
+      this.hud.setVehicleHealth(driving.health, driving.maxHealth, VEHICLE_SIM_CONFIGS[driving.type].label);
       // 第三人称相机跟随载具
       const vpos = driving.mesh.position;
       this.camera.position.set(vpos.x, vpos.y + 3, vpos.z + 6);
@@ -1414,10 +1419,22 @@ export class GameScene {
       if (input.left) turn = 1;
       if (input.right) turn = -1;
       this.networkGameClient.sendVehicleDrive(forward, turn);
-    } else if (this.inNetworkVehicle) {
-      // 被挤下车 / 载具被摧毁（服务端清空 driverId）→ 被动退出驾驶
-      this.inNetworkVehicle = false;
-      this.hud.addKillMessage('已离开载具', this.simulationTimeMs);
+      // 载具武器开火：客户端按武器冷却节流发送（服务端权威裁决伤害/冷却）；
+      // 弹道方向 = 载具朝向（服务端坐标系前向），本地即时开火反馈（炮口闪光 + 音效）
+      const weapon = VEHICLE_SIM_CONFIGS[driving.type].weapons[0];
+      if (input.fire && weapon && this.simulationTimeMs - this.lastVehicleFireSent >= weapon.cooldownMs) {
+        this.lastVehicleFireSent = this.simulationTimeMs;
+        this.networkGameClient.sendVehicleFire(driving.id, driving.mesh.rotation.y, 0, 0);
+        this.networkVehicles.flash(driving.id, this.simulationTimeMs);
+        this.audioSystem.play(SoundType.GUNSHOT, vpos);
+      }
+    } else {
+      if (this.inNetworkVehicle) {
+        // 被挤下车 / 载具被摧毁（服务端清空 driverId）→ 被动退出驾驶
+        this.inNetworkVehicle = false;
+        this.hud.addKillMessage('已离开载具', this.simulationTimeMs);
+      }
+      this.hud.hideVehicleHealth();
     }
   }
 
@@ -2464,7 +2481,7 @@ export class GameScene {
 
     // 载具控制：联网模式走服务端权威视觉/驾驶，单机模式走本地物理模拟
     if (this.networkGameClient && this.networkVehicles) {
-      this.networkVehicles.update(dt);
+      this.networkVehicles.update(dt, this.simulationTimeMs);
       this.updateNetworkVehicleControl(dt);
     } else {
       this.updateVehicleControl(dt);

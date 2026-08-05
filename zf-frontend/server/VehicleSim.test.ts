@@ -57,8 +57,7 @@ describe('VehicleSim', () => {
   it('驾驶：无司机时输入无效（需司机身份）', () => {
     const sim = new VehicleSim();
     sim.drive('v1', 1, 0, 1);
-    const v = sim.getState(1, 'r').vehicles.find((x) => x.id === 'v1')!;
-    expect(v.x).toBe(-16);
+    const v = sim.getState(1, 'r').vehicles.find((x) => x.id === 'v1')!;    expect(v.x).toBe(-16);
     expect(v.z).toBe(-16);
   });
 
@@ -90,5 +89,38 @@ describe('VehicleSim', () => {
     expect(v.x).toBe(-16);
     expect(v.z).toBe(-16);
     expect(v.driverId).toBeNull();
+  });
+
+  it('载具开火：仅司机且武器冷却通过才发射（返回弹丸参数），否则拒绝', () => {
+    const sim = new VehicleSim();
+    // v1 是吉普（机枪 cooldown 140ms）；先上车
+    expect(sim.enter('v1', 'p1', -16, -15)).toBe(true);
+
+    // 非司机（p2 未上车）→ 拒绝
+    expect(sim.fire('v1', 'p2', 0, 0, 1000)).toBeNull();
+    // 司机首次开火 → 成功（机枪 14 伤、140 m/s、射程 200m）
+    const r1 = sim.fire('v1', 'p1', 0.5, 0, 1000);
+    expect(r1).not.toBeNull();
+    expect(r1!.damage).toBe(14);
+    expect(r1!.speedMps).toBe(140);
+    expect(r1!.x).toBe(-16);
+    expect(r1!.z).toBe(-16);
+    // 冷却内再开火 → 拒绝（100ms < 140ms）
+    expect(sim.fire('v1', 'p1', 0.5, 0, 1100)).toBeNull();
+    // 冷却过后（140ms+）→ 成功
+    expect(sim.fire('v1', 'p1', 0.5, 0, 1145)).not.toBeNull();
+  });
+
+  it('载具开火：摧毁后拒绝；无武器载具（卡车）返回 null', () => {
+    const sim = new VehicleSim();
+    // v2 是坦克（主炮 cooldown 1800ms）
+    expect(sim.enter('v2', 'p2', 16, 17)).toBe(true);
+    expect(sim.fire('v2', 'p2', 0, 0, 1000)!.damage).toBe(120);
+    // 摧毁后拒绝
+    sim.takeDamage('v2', 99999);
+    expect(sim.fire('v2', 'p2', 0, 0, 99999)).toBeNull();
+    // 非法 weaponIndex（司机身份合法但索引越界）→ 拒绝
+    expect(sim.enter('v1', 'p3', -16, -15)).toBe(true);
+    expect(sim.fire('v1', 'p3', 0, 0, 0, 5)).toBeNull();
   });
 });

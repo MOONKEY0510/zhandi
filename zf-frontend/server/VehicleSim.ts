@@ -11,25 +11,11 @@
 import {
   MAP_BOUND,
   VEHICLE_SPAWN_DEFS,
+  VEHICLE_SIM_CONFIGS,
   type VehicleSpawnDef,
   type VehicleStateMsg,
   type VehicleTypeNet,
 } from '../shared/protocol.ts';
-
-export interface VehicleSimConfig {
-  maxSpeed: number;
-  acceleration: number;
-  turnSpeed: number;
-  health: number;
-}
-
-/** 与客户端 VehicleConfig 对齐的量级（jeep/tank/truck/motorcycle） */
-export const VEHICLE_SIM_CONFIGS: Record<VehicleTypeNet, VehicleSimConfig> = {
-  0: { maxSpeed: 30, acceleration: 8, turnSpeed: 2, health: 200 },
-  1: { maxSpeed: 15, acceleration: 3, turnSpeed: 1, health: 500 },
-  2: { maxSpeed: 20, acceleration: 4, turnSpeed: 1.5, health: 300 },
-  3: { maxSpeed: 40, acceleration: 12, turnSpeed: 3, health: 80 },
-};
 
 export const VEHICLE_RESPAWN_DELAY_SECONDS = 15;
 
@@ -48,10 +34,24 @@ interface SimVehicle {
   destroyed: boolean;
   respawnTimer: number;
   driverId: string | null;
+  /** 每武器上次开火时间（ms），冷却裁决用 */
+  lastFireAt: number[];
 }
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
+}
+
+/** 载具开火结果：发射参数（ServerApp 据此生成弹丸）或 null（被裁决拒绝） */
+export interface VehicleFireResult {
+  damage: number;
+  speedMps: number;
+  maxRange: number;
+  lifeMs: number;
+  /** 弹丸起点（载具位置 + 炮口高度） */
+  x: number;
+  y: number;
+  z: number;
 }
 
 export class VehicleSim {
@@ -71,6 +71,7 @@ export class VehicleSim {
       destroyed: false,
       respawnTimer: 0,
       driverId: null,
+      lastFireAt: VEHICLE_SIM_CONFIGS[d.type].weapons.map(() => Number.NEGATIVE_INFINITY),
     }));
   }
 
@@ -160,6 +161,64 @@ export class VehicleSim {
     return false;
   }
 
+  /**
+   * 载具开火（仅司机；服务端裁决武器存在/冷却 → 返回弹丸发射参数）。
+   * 弹道方向由客户端 aimYaw/aimPitch 决定（世界坐标系，与玩家弹丸一致）。
+   */
+  fire(
+    vehicleId: string,
+    playerId: string,
+    aimYaw: number,
+    aimPitch: number,
+    nowMs: number,
+    weaponIndex = 0,
+  ): VehicleFireResult | null {
+    const v = this.getVehicle(vehicleId);
+    if (!v || v.destroyed || v.driverId !== playerId) return null;
+    const weapons = VEHICLE_SIM_CONFIGS[v.type].weapons;
+    const weapon = weapons[weaponIndex];
+    if (!weapon) return null;
+    const last = v.lastFireAt[weaponIndex] ?? Number.NEGATIVE_INFINITY;
+    if (nowMs - last < weapon.cooldownMs) return null;
+
+    v.lastFireAt[weaponIndex] = nowMs;
+    // 炮口高度：按车体中心略上（弹道圆柱判定对载具高度敏感度低于玩家）
+    return {
+      damage: weapon.damage,
+      speedMps: weapon.speedMps,
+      maxRange: weapon.maxRange,
+      lifeMs: weapon.lifeMs,
+      x: v.x,
+      y: 0.8,
+      z: v.z,
+    };
+  }
+
+  /** 载具列表（ServerApp 组装弹道目标与命中裁决用） */
+  list(): ReadonlyArray<{
+    id: string;
+    type: VehicleTypeNet;
+    x: number;
+    z: number;
+    health: number;
+    team: SimVehicle['team'];
+    destroyed: boolean;
+    driverId: string | null;
+    hitRadius: number;
+  }> {
+    return this.vehicles.map((v) => ({
+      id: v.id,
+      type: v.type,
+      x: v.x,
+      z: v.z,
+      health: v.health,
+      team: v.team,
+      destroyed: v.destroyed,
+      driverId: v.driverId,
+      hitRadius: VEHICLE_SIM_CONFIGS[v.type].hitRadius,
+    }));
+  }
+
   private respawn(v: SimVehicle): void {
     const def = VEHICLE_SPAWN_DEFS.find((d) => d.id === v.id);
     v.destroyed = false;
@@ -170,6 +229,7 @@ export class VehicleSim {
     v.speed = 0;
     v.respawnTimer = 0;
     v.driverId = null;
+    v.lastFireAt = VEHICLE_SIM_CONFIGS[v.type].weapons.map(() => Number.NEGATIVE_INFINITY);
   }
 
   getState(tick: number, roomId: string): VehicleStateMsg {

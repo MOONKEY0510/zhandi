@@ -58,6 +58,9 @@ export class HUD {
     cpA: HTMLElement | null;
     cpB: HTMLElement | null;
     cpC: HTMLElement | null;
+    vehicleHealthContainer: HTMLElement | null;
+    vehicleHealthBar: HTMLElement | null;
+    vehicleHealthName: HTMLElement | null;
   } = {
     healthBar: null,
     healthText: null,
@@ -79,6 +82,9 @@ export class HUD {
     cpA: null,
     cpB: null,
     cpC: null,
+    vehicleHealthContainer: null,
+    vehicleHealthBar: null,
+    vehicleHealthName: null,
   };
 
   killMessages: { text: string; time: number }[] = [];
@@ -137,6 +143,13 @@ export class HUD {
           </div>
         </div>
         <div id="health-text" style="font-size: 28px; font-weight: bold; min-width: 60px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);">100</div>
+      </div>
+
+      <div id="vehicle-health-container" style="position: absolute; bottom: 95px; left: 40px; opacity: 0; transition: opacity 0.2s;">
+        <div id="vehicle-health-name" style="font-size: 14px; color: #ffcc66; margin-bottom: 4px; text-shadow: 1px 1px 2px rgba(0,0,0,0.8);">载具</div>
+        <div style="width: 200px; height: 10px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,204,102,0.5); border-radius: 2px; overflow: hidden;">
+          <div id="vehicle-health-bar" style="height: 100%; background: linear-gradient(to right, #aa6600, #ffcc66); width: 100%; transition: width 0.15s;"></div>
+        </div>
       </div>
 
       <div id="ammo-container" style="position: absolute; bottom: 40px; right: 40px; text-align: right;">
@@ -219,6 +232,9 @@ export class HUD {
     this.elements.cpA = container.querySelector('#cp-A');
     this.elements.cpB = container.querySelector('#cp-B');
     this.elements.cpC = container.querySelector('#cp-C');
+    this.elements.vehicleHealthContainer = container.querySelector('#vehicle-health-container');
+    this.elements.vehicleHealthBar = container.querySelector('#vehicle-health-bar');
+    this.elements.vehicleHealthName = container.querySelector('#vehicle-health-name');
 
     this.reloadBar = container.querySelector('#reload-bar');
     this.reloadProgress = container.querySelector('#reload-progress');
@@ -493,6 +509,19 @@ export class HUD {
     }
 
     this.renderKillFeed();
+  }
+
+  /** 驾驶载具时显示载具血量条（health/maxHealth，name 如「吉普车」「坦克」） */
+  setVehicleHealth(health: number, maxHealth: number, name: string): void {
+    if (!this.elements.vehicleHealthContainer || !this.elements.vehicleHealthBar) return;
+    this.elements.vehicleHealthContainer.style.opacity = '1';
+    this.elements.vehicleHealthBar.style.width = `${Math.max(0, Math.min(100, (health / Math.max(1, maxHealth)) * 100))}%`;
+    if (this.elements.vehicleHealthName) this.elements.vehicleHealthName.textContent = name;
+  }
+
+  /** 离开载具隐藏血量条 */
+  hideVehicleHealth(): void {
+    if (this.elements.vehicleHealthContainer) this.elements.vehicleHealthContainer.style.opacity = '0';
   }
 
   private updateKillFeed(currentTime: number): void {

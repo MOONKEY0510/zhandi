@@ -38,12 +38,12 @@ describe('NetworkVehicles（阶段 8 第十五批：联网载具视觉）', () =
     nv.applyState(state([
       { id: 'v1', type: 0, x: 10, z: 10, yaw: 0, health: 200, maxHealth: 200, team: 0, destroyed: false, respawnIn: 0, driverId: null },
     ]));
-    nv.update(1 / 60);
+    nv.update(1 / 60, 1000);
     const v = nv.getById('v1')!;
     expect(v.mesh.position.x).toBeGreaterThan(0);
     expect(v.mesh.position.x).toBeLessThan(10);
     // 多帧收敛到目标
-    for (let i = 0; i < 120; i += 1) nv.update(1 / 60);
+    for (let i = 0; i < 120; i += 1) nv.update(1 / 60, 1000 + i * 16);
     expect(v.mesh.position.x).toBeCloseTo(10, 1);
     expect(v.mesh.position.z).toBeCloseTo(10, 1);
     nv.clear();
