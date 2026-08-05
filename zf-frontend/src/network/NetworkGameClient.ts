@@ -9,7 +9,7 @@
  */
 
 import { NetClient, type NetClientStats, type RawTransport } from './NetClient.ts';
-import type { PlayerInput } from '../../shared/protocol.ts';
+import type { PlayerInput, ServerGameState } from '../../shared/protocol.ts';
 import type { InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { RemotePlayerView } from './RemotePlayerView.ts';
 import type { NetSimulator } from './NetSimulator.ts';
@@ -38,6 +38,7 @@ export class NetworkGameClient {
   onPlayerLeave: ((playerId: string, reason: 'left' | 'timeout' | 'kicked') => void) | null = null;
   onJoinAck: ((ack: { roomId: string; team: 0 | 1; slot: number; resumed: boolean }) => void) | null = null;
   onRoomState: ((state: { roomId: string; phase: string; players: unknown[] }) => void) | null = null;
+  onGameState: ((state: ServerGameState) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
@@ -73,6 +74,7 @@ export class NetworkGameClient {
     this.client.onJoinAck = (ack) => this.onJoinAck?.(ack);
     this.client.onRoomState = (state) =>
       this.onRoomState?.({ roomId: state.roomId, phase: state.phase, players: state.players });
+    this.client.onGameState = (state) => this.onGameState?.(state);
     this.client.onError = (code, message) => this.onError?.(code, message);
     this.client.onDisconnect = (reason) => this.onDisconnect?.(reason);
     this.client.onPredictionReconcile = (result) => this.onPredictionReconcile?.(result);

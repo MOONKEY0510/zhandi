@@ -11,6 +11,7 @@ import {
   type RoomState,
   type PlayerInput,
   type RoomPhase,
+  type ServerGameState,
   MAX_MESSAGE_BYTES,
 } from './protocol.ts';
 
@@ -32,9 +33,10 @@ const TAG_BY_KIND: Record<MessageKind, number> = {
   input: 6,
   snapshot: 7,
   player_leave: 8,
-  ping: 9,
-  pong: 10,
-  error: 11,
+  game_state: 9,
+  ping: 10,
+  pong: 11,
+  error: 12,
 };
 
 const KIND_BY_TAG: Record<number, MessageKind> = Object.fromEntries(
@@ -89,6 +91,13 @@ function sizeOf(msg: NetworkMessage): number {
     }
     case 'player_leave':
       return 1 + 1 + utf8Len(msg.playerId) + 1;
+    case 'game_state': {
+      let size = 1 + 1 + utf8Len(msg.roomId) + 1 + 4 + 4 + 2 + 2 + 2 + 2 + 2 + 1 + 1;
+      for (const o of msg.objectives) {
+        size += 1 + utf8Len(o.id) + 1 + 2;
+      }
+      return size;
+    }
     case 'ping':
       return 1 + 8;
     case 'pong':
@@ -174,6 +183,24 @@ function encodeBody(msg: NetworkMessage, view: DataView): void {
       o = writeString(view, o, msg.playerId);
       view.setUint8(o, LEAVE_REASON_INDEX[msg.reason]); o += 1;
       break;
+    case 'game_state':
+      o = writeString(view, o, msg.roomId);
+      view.setUint8(o, ROOM_PHASE_INDEX[msg.phase]); o += 1;
+      view.setUint32(o, msg.tick, true); o += 4;
+      view.setUint32(o, msg.serverTime, true); o += 4;
+      view.setUint16(o, msg.maxTickets, true); o += 2;
+      view.setUint16(o, msg.tickets[0], true); o += 2;
+      view.setUint16(o, msg.tickets[1], true); o += 2;
+      view.setUint16(o, msg.kills[0], true); o += 2;
+      view.setUint16(o, msg.kills[1], true); o += 2;
+      view.setUint8(o, msg.winner === null ? 255 : msg.winner); o += 1;
+      view.setUint8(o, msg.objectives.length); o += 1;
+      for (const obj of msg.objectives) {
+        o = writeString(view, o, obj.id);
+        view.setUint8(o, obj.owner); o += 1;
+        view.setInt16(o, Math.max(-100, Math.min(100, Math.round(obj.progress))), true); o += 2;
+      }
+      break;
     case 'ping':
       view.setFloat64(o, msg.clientTime, true); o += 8;
       break;
@@ -229,6 +256,13 @@ class Reader {
   u16(): number {
     this.ensure(2);
     const v = this.view.getUint16(this.offset, true);
+    this.offset += 2;
+    return v;
+  }
+
+  i16(): number {
+    this.ensure(2);
+    const v = this.view.getInt16(this.offset, true);
     this.offset += 2;
     return v;
   }
@@ -371,6 +405,28 @@ export function decodeMessage(bytes: Uint8Array): NetworkMessage {
       const playerId = r.string();
       const reason = LEAVE_REASON_BY_INDEX[r.u8()] ?? 'left';
       return { kind, playerId, reason };
+    }
+    case 'game_state': {
+      const roomId = r.string(64);
+      const phase = ROOM_PHASE_BY_INDEX[r.u8()] ?? 'waiting';
+      const tick = r.u32();
+      const serverTime = r.u32();
+      const maxTickets = r.u16();
+      const t0 = r.u16();
+      const t1 = r.u16();
+      const k0 = r.u16();
+      const k1 = r.u16();
+      const winnerRaw = r.u8();
+      const winner: ServerGameState['winner'] = winnerRaw === 255 ? null : (winnerRaw as 0 | 1);
+      const count = r.u8();
+      const objectives: ServerGameState['objectives'] = [];
+      for (let i = 0; i < count; i++) {
+        const id = r.string(32);
+        const owner = r.u8() as ServerGameState['objectives'][number]['owner'];
+        const progress = r.i16();
+        objectives.push({ id, owner, progress });
+      }
+      return { kind, roomId, phase, tick, serverTime, maxTickets, tickets: [t0, t1], kills: [k0, k1], objectives, winner };
     }
     case 'ping':
       return { kind, clientTime: r.f64() };

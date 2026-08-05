@@ -10,6 +10,7 @@ import {
   type PlayerInput,
   type RoomState,
   type JoinAck,
+  type ServerGameState,
 } from '../../shared/protocol.ts';
 import { encodeMessage, decodeMessage, ProtocolError } from '../../shared/codec.ts';
 import { TICK_RATE_HZ } from '../../shared/protocol.ts';
@@ -131,6 +132,7 @@ export class NetClient {
   onSnapshot: ((players: Map<string, InterpolatedPlayer>, snapshot: SnapshotData) => void) | null = null;
   onRoomState: ((state: RoomState) => void) | null = null;
   onJoinAck: ((ack: JoinAck) => void) | null = null;
+  onGameState: ((state: ServerGameState) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 房间内玩家离开（超时清理/主动退出），用于移除远端实体 */
@@ -370,6 +372,9 @@ export class NetClient {
       case 'room_state':
         this.phase = msg.phase;
         this.onRoomState?.(msg);
+        break;
+      case 'game_state':
+        this.onGameState?.(msg);
         break;
       case 'snapshot': {
         this.snapshotsReceived += 1;

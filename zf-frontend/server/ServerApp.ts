@@ -23,6 +23,7 @@ import { SimClock } from './SimClock.ts';
 import { RoomManager } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
 import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
+import { ConquestSim, type ConquestPlayerRef } from './ConquestSim.ts';
 
 export interface ServerAppOptions {
   port?: number;
@@ -181,6 +182,9 @@ export class ServerApp {
           return;
         }
         conn.roomId = room.id;
+        // 首个玩家加入即开局（演示语义：房间创建即进入征服对局）
+        room.conquest ??= new ConquestSim();
+        if (room.phase === 'waiting') room.start();
         const teamSpawn = SPAWN[result.player.team];
         conn.sim = new PlayerSim(result.player.id, result.player.team, teamSpawn);
         if (!result.resumed) {
@@ -224,6 +228,7 @@ export class ServerApp {
       case 'join_ack':
       case 'room_state':
       case 'player_leave':
+      case 'game_state':
       case 'error':
         // 客户端不应向服务器发送这些消息
         this.send(conn.ws, { kind: 'error', code: 'unexpected_message', message: `客户端不应发送 ${msg.kind}` });
@@ -315,12 +320,44 @@ export class ServerApp {
     this.projectiles.step(deltaSeconds, targets, (hit) => {
       const targetConn = this.findConnection(hit.targetId);
       if (targetConn?.sim) {
+        const wasAlive = targetConn.sim.state.alive;
         targetConn.sim.takeDamage(hit.damage);
+        // 死亡翻转：服务端权威扣兵力 + 记击杀（客户端无法伪造）
+        if (wasAlive && !targetConn.sim.state.alive) {
+          const room = targetConn.roomId ? this.roomManager.getRoom(targetConn.roomId) : null;
+          const shooterConn = this.findConnection(hit.ownerId);
+          if (room?.conquest && shooterConn?.sim) {
+            room.conquest.onPlayerKilled(targetConn.sim.state.team, shooterConn.sim.state.team);
+          }
+        }
       }
     });
 
+    // 征服规则推进（服务端权威：占点 / 兵力流失 / 胜负判定）
+    for (const room of this.roomManager.listRooms()) {
+      if (room.phase !== 'started' || !room.conquest) continue;
+      const refs: ConquestPlayerRef[] = [];
+      for (const p of room.players) {
+        const c = this.findConnection(p.id);
+        if (c?.sim) {
+          const s = c.sim.state;
+          refs.push({ id: s.id, team: s.team, x: s.x, z: s.z, alive: s.alive });
+        }
+      }
+      room.conquest.update(deltaSeconds, refs);
+      if (room.conquest.winner !== null) room.end();
+    }
+
     if (shouldSnapshot) {
       this.broadcastSnapshots(tick);
+    }
+    // 游戏状态广播（~2Hz，30Hz tick 下每 15 tick 一次）
+    if (tick % 15 === 0) {
+      for (const room of this.roomManager.listRooms()) {
+        if (room.conquest) {
+          this.broadcastToRoom(room.id, room.conquest.getState(room.id, room.phaseLabel, tick, this.clock.nowMs()));
+        }
+      }
     }
   }
 

@@ -8,6 +8,7 @@ import { PlayerController } from '../player/PlayerController';
 import { InputManager } from '../input/InputManager';
 import { NetworkGameClient } from '../network/NetworkGameClient';
 import { TICK_RATE_HZ } from '../../shared/protocol';
+import type { ServerGameState } from '../../shared/protocol';
 import { WeaponSystem, WeaponType, FireMode } from '../weapons/WeaponSystem';
 import { WeaponView } from '../weapons/WeaponView';
 import { MuzzleFlash } from '../weapons/MuzzleFlash';
@@ -99,6 +100,8 @@ export class GameScene {
   private player: PlayerController | null = null;
   private inputManager: InputManager;
   private networkGameClient: NetworkGameClient | null = null;
+  /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
+  private serverGameState: ServerGameState | null = null;
   private remotePlayerMeshes: Map<string, THREE.Group> = new Map();
 
   // 武器
@@ -839,6 +842,9 @@ export class GameScene {
   async connectToServer(wsUrl: string, playerId: string): Promise<void> {
     this.networkGameClient = new NetworkGameClient();
     this.networkGameClient.onPlayerLeave = (id) => this.removeRemotePlayer(id);
+    this.networkGameClient.onGameState = (state) => {
+      this.serverGameState = state;
+    };
     this.networkGameClient.onError = (code, message) => {
       console.warn(`[网络] 服务器错误 ${code}: ${message}`);
     };
@@ -2453,8 +2459,19 @@ export class GameScene {
     this.updateControlPointVisuals();
 
     const conquestHud = this.conquestPresenter.getHudState();
-    const tickets = conquestHud.tickets;
-    const cpStatus = conquestHud.controlPoints;
+    let tickets = conquestHud.tickets;
+    let controlPoints = conquestHud.controlPoints.map(cp => ({ id: cp.id, owner: cp.owner, progress: cp.progress }));
+    // 联网模式（收到服务端 game_state）：HUD 兵力/据点改用服务端权威数据驱动，
+    // 本地 AI 对局的征服模拟不再影响显示（场景据点视觉仍由本地模拟维护，后续切片统一）
+    const gs = this.serverGameState;
+    if (gs && (gs.phase === 'started' || gs.phase === 'ended')) {
+      tickets = { axis: gs.tickets[0], allies: gs.tickets[1] };
+      controlPoints = gs.objectives.map(o => ({
+        id: o.id,
+        owner: o.owner === 0 ? TeamId.AXIS : o.owner === 1 ? TeamId.ALLIES : TeamId.NEUTRAL,
+        progress: o.progress,
+      }));
+    }
 
     this.hud.update(
       {
@@ -2475,7 +2492,7 @@ export class GameScene {
         axisTickets: tickets.axis,
         alliesTickets: tickets.allies,
         playerTeam: this.conquestMode.playerTeam,
-        controlPoints: cpStatus.map(cp => ({ id: cp.id, owner: cp.owner, progress: cp.progress })),
+        controlPoints,
       },
       time
     );
@@ -2546,6 +2563,7 @@ export class GameScene {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
     this.networkGameClient?.disconnect();
+    this.serverGameState = null;
     for (const mesh of this.remotePlayerMeshes.values()) {
       this.scene.remove(mesh);
     }

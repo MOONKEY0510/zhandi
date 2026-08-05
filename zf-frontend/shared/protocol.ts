@@ -48,6 +48,7 @@ export type MessageKind =
   | 'input'
   | 'snapshot'
   | 'player_leave'
+  | 'game_state'
   | 'ping'
   | 'pong'
   | 'error';
@@ -141,6 +142,38 @@ export interface Snapshot {
   players: SnapshotPlayer[];
 }
 
+/**
+ * 据点归属：0/1 = 队伍（与 TeamIdNet 一致），2 = 中立。
+ * 协议约定：team 0 = 德军（红/AXIS），team 1 = 苏军（蓝/ALLIES）。
+ */
+export type ObjectiveOwner = TeamIdNet | 2;
+
+export interface ObjectiveState {
+  id: string;
+  owner: ObjectiveOwner;
+  /** 捕获进度 -100..100（正 = 队 0 控制方向，负 = 队 1） */
+  progress: number;
+}
+
+/** 服务端权威游戏状态（阶段 8：征服规则权威化第一步，~2Hz 广播） */
+export interface ServerGameState {
+  kind: 'game_state';
+  roomId: string;
+  phase: RoomPhase;
+  tick: number;
+  /** 服务器时间 ms（客户端对齐显示用） */
+  serverTime: number;
+  /** [队0, 队1] 兵力值（征服模式） */
+  tickets: [number, number];
+  /** 每队初始兵力 */
+  maxTickets: number;
+  /** [队0, 队1] 击杀数 */
+  kills: [number, number];
+  objectives: ObjectiveState[];
+  /** 胜者（null = 对局未结束） */
+  winner: TeamIdNet | null;
+}
+
 export interface PlayerLeave {
   kind: 'player_leave';
   playerId: string;
@@ -173,6 +206,7 @@ export type NetworkMessage =
   | PlayerInput
   | Snapshot
   | PlayerLeave
+  | ServerGameState
   | Ping
   | Pong
   | ErrorMsg;

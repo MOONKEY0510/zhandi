@@ -11,6 +11,7 @@ import {
   type RoomPhase,
   type RoomPlayerInfo,
 } from '../shared/protocol.ts';
+import type { ConquestSim } from './ConquestSim.ts';
 
 export interface RoomPlayer {
   id: string;
@@ -43,6 +44,8 @@ export class Room {
   map: string;
   phase: RoomPhase = 'waiting';
   players: RoomPlayer[] = [];
+  /** 服务端权威征服规则（首个玩家加入时由 ServerApp 创建） */
+  conquest: ConquestSim | null = null;
   /** 单调递增的槽位计数器 */
   private nextSlot = 0;
 

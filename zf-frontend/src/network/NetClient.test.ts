@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { NetClient, type RawTransport } from './NetClient.ts';
 import { ClientPrediction } from './ClientPrediction.ts';
 import { encodeMessage, decodeMessage } from '../../shared/codec.ts';
-import { PROTOCOL_VERSION, TICK_RATE_HZ, PLAYER_WALK_SPEED, type Snapshot } from '../../shared/protocol.ts';
+import { PROTOCOL_VERSION, TICK_RATE_HZ, PLAYER_WALK_SPEED, type Snapshot, type ServerGameState } from '../../shared/protocol.ts';
 
 /** 内存假传输：记录发出的消息，允许测试注入服务端回复 */
 class FakeTransport implements RawTransport {
@@ -72,6 +72,35 @@ describe('NetClient（阶段 8 协议客户端）', () => {
     expect(transport.decodeLast()!.kind).toBe('join');
     transport.inject({ kind: 'join_ack', roomId: 'r1', playerId: 'p1', team: 0, slot: 1, resumed: false });
     expect(client.getStats().roomId).toBe('r1');
+  });
+
+  it('game_state 触发 onGameState 回调', async () => {
+    const transport = new FakeTransport();
+    const client = NetClient.withTransport(transport, 'p1', '玩家一', { pingIntervalMs: 0 });
+    await client.connect();
+    let received: ServerGameState | null = null;
+    client.onGameState = (s) => { received = s; };
+    transport.inject({
+      kind: 'game_state',
+      roomId: 'r1',
+      phase: 'started',
+      tick: 42,
+      serverTime: 123456,
+      tickets: [300, 299],
+      maxTickets: 300,
+      kills: [1, 0],
+      objectives: [
+        { id: 'alpha', owner: 0, progress: 100 },
+        { id: 'bravo', owner: 2, progress: 0 },
+        { id: 'charlie', owner: 1, progress: -50 },
+      ],
+      winner: null,
+    });
+    expect(received).not.toBeNull();
+    expect(received!.tickets).toEqual([300, 299]);
+    expect(received!.kills).toEqual([1, 0]);
+    expect(received!.objectives).toHaveLength(3);
+    expect(received!.objectives[2]).toEqual({ id: 'charlie', owner: 1, progress: -50 });
   });
 
   it('sendInput 附加单调递增 seq', async () => {
