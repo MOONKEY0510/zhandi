@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
+import { ProjectileSim, segmentHitsRotatedRect, segmentYOverlaps, type ProjectileTarget, type ProjectileObstacle } from './ProjectileSim.ts';
 import { BULLET_DAMAGE, BULLET_HEIGHT_HALF, BULLET_HIT_RADIUS, BULLET_MAX_RANGE } from '../shared/protocol.ts';
 
 const DT = 1 / 30;
@@ -119,5 +119,67 @@ describe('ProjectileSim（阶段 8 服务端命中裁决）', () => {
     const west = target('e2', 1, -3, 0);
     for (let i = 0; i < 100; i++) sim.step(DT, [east, west]);
     expect(sim.stats.hits).toBe(2);
+  });
+
+  it('挡弹：弹道穿过障碍物时弹丸消散，不命中障碍物后方目标', () => {
+    const sim = new ProjectileSim();
+    shootForward(sim); // 朝 +x
+    const enemy = target('e1', 1, 8, 0);
+    // 沙袋：中心 (3,0)，2×1×1 → 半宽 1 / 半深 0.5，中心高 0.5
+    const sandbag: ProjectileObstacle = {
+      id: 0, x: 3, z: 0, rotationY: 0, halfWidth: 1, halfDepth: 0.5, centerY: 0.5, halfHeight: 0.5, destroyed: false,
+    };
+    const obstacleHits: { obstacleId: number }[] = [];
+    for (let i = 0; i < 200; i++) {
+      const hits = sim.step(DT, [enemy], undefined, [sandbag], (h) => obstacleHits.push(h));
+      if (hits.length > 0 || obstacleHits.length > 0) break;
+    }
+    expect(obstacleHits).toHaveLength(1);
+    expect(obstacleHits[0].obstacleId).toBe(0);
+    expect(sim.stats.hits).toBe(0); // 目标未被命中（挡弹优先）
+    expect(sim.count).toBe(0); // 弹丸已消散
+  });
+
+  it('已破坏障碍物不挡弹（弹丸穿过，正常命中目标）', () => {
+    const sim = new ProjectileSim();
+    shootForward(sim);
+    const enemy = target('e1', 1, 8, 0);
+    const broken: ProjectileObstacle = {
+      id: 0, x: 3, z: 0, rotationY: 0, halfWidth: 1, halfDepth: 0.5, centerY: 0.5, halfHeight: 0.5, destroyed: true,
+    };
+    let hits = 0;
+    for (let i = 0; i < 200; i++) hits += sim.step(DT, [enemy], undefined, [broken]).length;
+    expect(hits).toBe(1);
+  });
+
+  it('垂直范围过滤：弹道高于障碍物顶不挡弹', () => {
+    const sim = new ProjectileSim();
+    sim.spawn({ ownerId: 'p1', team: 0, x: 0, y: 2, z: 0, yaw: Math.PI / 2, pitch: 0 }); // 弹道 y=2
+    const enemy = target('e1', 1, 8, 0);
+    const sandbag: ProjectileObstacle = {
+      id: 0, x: 3, z: 0, rotationY: 0, halfWidth: 1, halfDepth: 0.5, centerY: 0.5, halfHeight: 0.5, destroyed: false,
+    };
+    const obstacleHits: unknown[] = [];
+    let hits = 0;
+    for (let i = 0; i < 200; i++) {
+      hits += sim.step(DT, [enemy], undefined, [sandbag], (h) => obstacleHits.push(h)).length;
+    }
+    expect(obstacleHits).toHaveLength(0); // 沙袋高 1m，弹道 2m 不触发
+    expect(hits).toBe(0); // 目标 y=0 也不在弹道上（垂直偏差超半高）
+  });
+
+  it('旋转矩形相交：旋转后的细长障碍物按局部轴判定', () => {
+    // 栅栏：3×1.2×0.1，旋转 90° 后长轴沿世界 z（半深 0.05 沿世界 x）
+    const fence: ProjectileObstacle = {
+      id: 4, x: 0, z: 0, rotationY: Math.PI / 2, halfWidth: 1.5, halfDepth: 0.05, centerY: 0.6, halfHeight: 0.6, destroyed: false,
+    };
+    // 弹道沿世界 z 穿过中心（x=0）：命中
+    expect(segmentHitsRotatedRect(0, -2, 0, 2, fence)).toBe(true);
+    // 弹道沿世界 z 但 x 偏移 0.2m（超出短轴半宽 0.05）：不命中
+    expect(segmentHitsRotatedRect(0.2, -2, 0.2, 2, fence)).toBe(false);
+    // 弹道沿世界 x 穿过中心：短轴半宽 0.05 沿 x，必然穿过 → 命中（薄栅栏侧面拦截）
+    expect(segmentHitsRotatedRect(-2, 0, 2, 0, fence)).toBe(true);
+    expect(segmentYOverlaps(0.5, 0.5, fence)).toBe(true); // y=0.5 在 0..1.2 内
+    expect(segmentYOverlaps(1.5, 1.5, fence)).toBe(false); // y=1.5 高于栅栏顶
   });
 });

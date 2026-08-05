@@ -298,4 +298,21 @@ describe('NetworkGameClient（阶段 8 第九批：GameScene 网络桥接层）'
     expect(own!.health).toBe(0);
     bridge.disconnect();
   });
+
+  it('destructible_state 透传：onDestructibleState 收到服务端破坏 bitset（GameScene 破坏表现依据）', async () => {
+    const { bridge, transport } = await setupBridge();
+    const states: unknown[] = [];
+    bridge.onDestructibleState = (s) => states.push(s);
+    transport.inject({
+      kind: 'destructible_state',
+      roomId: 'r1',
+      tick: 9,
+      bits: '10000001',
+    });
+    expect(states).toHaveLength(1);
+    const s = states[0] as { kind: string; bits: string };
+    expect(s.kind).toBe('destructible_state');
+    expect(s.bits).toBe('10000001');
+    bridge.disconnect();
+  });
 });

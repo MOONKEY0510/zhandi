@@ -9,7 +9,7 @@
  */
 
 import { NetClient, type NetClientStats, type RawTransport } from './NetClient.ts';
-import type { PlayerInput, ServerGameState, VehicleStateMsg, KillFeedMsg } from '../../shared/protocol.ts';
+import type { PlayerInput, ServerGameState, VehicleStateMsg, KillFeedMsg, DestructibleStateMsg } from '../../shared/protocol.ts';
 import type { InterpolatedPlayer } from './SnapshotBuffer.ts';
 import { RemotePlayerView } from './RemotePlayerView.ts';
 import type { NetSimulator } from './NetSimulator.ts';
@@ -48,6 +48,7 @@ export class NetworkGameClient {
   onGameState: ((state: ServerGameState) => void) | null = null;
   onVehicleState: ((state: VehicleStateMsg) => void) | null = null;
   onKillFeed: ((msg: KillFeedMsg) => void) | null = null;
+  onDestructibleState: ((msg: DestructibleStateMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
@@ -88,6 +89,7 @@ export class NetworkGameClient {
     this.client.onGameState = (state) => this.onGameState?.(state);
     this.client.onVehicleState = (state) => this.onVehicleState?.(state);
     this.client.onKillFeed = (msg) => this.onKillFeed?.(msg);
+    this.client.onDestructibleState = (msg) => this.onDestructibleState?.(msg);
     this.client.onError = (code, message) => this.onError?.(code, message);
     this.client.onDisconnect = (reason) => this.onDisconnect?.(reason);
     this.client.onPredictionReconcile = (result) => this.onPredictionReconcile?.(result);

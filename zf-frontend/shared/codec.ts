@@ -43,6 +43,7 @@ const TAG_BY_KIND: Record<MessageKind, number> = {
   vehicle_drive: 13,
   vehicle_fire: 17,
   kill_feed: 18,
+  destructible_state: 19,
   ping: 14,
   pong: 15,
   error: 16,
@@ -131,6 +132,8 @@ function sizeOf(msg: NetworkMessage): number {
         1 + utf8Len(msg.victimName) +
         1 + utf8Len(msg.weaponLabel)
       );
+    case 'destructible_state':
+      return 1 + 1 + utf8Len(msg.roomId) + 4 + 1 + utf8Len(msg.bits);
     case 'ping':
       return 1 + 8;
     case 'pong':
@@ -273,6 +276,11 @@ function encodeBody(msg: NetworkMessage, view: DataView): void {
       o = writeString(view, o, msg.victimId);
       o = writeString(view, o, msg.victimName);
       o = writeString(view, o, msg.weaponLabel);
+      break;
+    case 'destructible_state':
+      o = writeString(view, o, msg.roomId);
+      view.setUint32(o, msg.tick, true); o += 4;
+      o = writeString(view, o, msg.bits);
       break;
     case 'ping':
       view.setFloat64(o, msg.clientTime, true); o += 8;
@@ -549,6 +557,12 @@ export function decodeMessage(bytes: Uint8Array): NetworkMessage {
       const victimName = r.string(64);
       const weaponLabel = r.string(32);
       return { kind, killerId, killerName, victimId, victimName, weaponLabel };
+    }
+    case 'destructible_state': {
+      const roomId = r.string(32);
+      const tick = r.u32();
+      const bits = r.string(64);
+      return { kind, roomId, tick, bits };
     }
     case 'ping':
       return { kind, clientTime: r.f64() };

@@ -56,6 +56,33 @@ export interface ProjectileHit {
   z: number;
 }
 
+/** 弹道障碍物（破坏物挡弹）：旋转矩形 + 垂直范围，命中后弹丸消散 */
+export interface ProjectileObstacle {
+  id: number;
+  x: number;
+  z: number;
+  rotationY: number;
+  /** 局部 x 半宽（沿旋转后的 x 轴） */
+  halfWidth: number;
+  /** 局部 z 半深 */
+  halfDepth: number;
+  /** 中心高度（地面以上） */
+  centerY: number;
+  halfHeight: number;
+  destroyed: boolean;
+  /** 所属房间（ServerApp 组装时附加，回调定位用） */
+  roomId?: string;
+}
+
+export interface ObstacleHit {
+  projectileId: number;
+  obstacleId: number;
+  x: number;
+  y: number;
+  z: number;
+  roomId?: string;
+}
+
 export interface ProjectileSimStats {
   spawned: number;
   hits: number;
@@ -109,7 +136,13 @@ export class ProjectileSim {
   }
 
   /** 每 tick 推进：子步进直线弹道（防隧穿）→ 寿命/射程到期 → 命中裁决（一弹最多命中一个目标） */
-  step(deltaSeconds: number, targets: ProjectileTarget[], onHit?: (hit: ProjectileHit) => void): ProjectileHit[] {
+  step(
+    deltaSeconds: number,
+    targets: ProjectileTarget[],
+    onHit?: (hit: ProjectileHit) => void,
+    obstacles?: ProjectileObstacle[],
+    onObstacleHit?: (hit: ObstacleHit) => void,
+  ): ProjectileHit[] {
     const hits: ProjectileHit[] = [];
     const consumed = new Set<number>();
     for (const p of this.projectiles) {
@@ -127,7 +160,11 @@ export class ProjectileSim {
       const nz = p.vz / speed;
 
       let hit: ProjectileHit | null = null;
-      for (let s = 0; s < subSteps && !hit; s++) {
+      let obstacleHit: ObstacleHit | null = null;
+      let prevX = p.x;
+      let prevY = p.y;
+      let prevZ = p.z;
+      for (let s = 0; s < subSteps && !hit && !obstacleHit; s++) {
         // 射程精确钳制：剩余距离不足一个子步长时直接置满（避免浮点累计差 1 ulp）
         const remaining = p.maxRange - p.traveled;
         if (remaining <= 1e-9) {
@@ -139,6 +176,19 @@ export class ProjectileSim {
         p.y += ny * move;
         p.z += nz * move;
         p.traveled += move;
+
+        // 挡弹判定（优先于目标命中）：存活障碍物与弹道线段相交 → 弹丸消散
+        if (obstacles && obstacles.length > 0) {
+          for (const ob of obstacles) {
+            if (ob.destroyed) continue;
+            if (segmentHitsRotatedRect(prevX, prevZ, p.x, p.z, ob) &&
+                segmentYOverlaps(prevY, p.y, ob)) {
+              obstacleHit = { projectileId: p.id, obstacleId: ob.id, x: p.x, y: p.y, z: p.z, roomId: ob.roomId };
+              break;
+            }
+          }
+        }
+        if (obstacleHit) break;
 
         // 命中判定：活着的敌方目标，水平距离 ≤ 命中半径 且 垂直偏差 ≤ 半高
         for (const t of targets) {
@@ -158,9 +208,15 @@ export class ProjectileSim {
             break;
           }
         }
+        prevX = p.x;
+        prevY = p.y;
+        prevZ = p.z;
       }
 
-      if (hit) {
+      if (obstacleHit) {
+        consumed.add(p.id);
+        onObstacleHit?.(obstacleHit);
+      } else if (hit) {
         hits.push(hit);
         this.stats.hits += 1;
         consumed.add(p.id);
@@ -184,4 +240,57 @@ export class ProjectileSim {
   clear(): void {
     this.projectiles = [];
   }
+}
+
+/**
+ * 线段与旋转矩形水平相交（slab 法，在障碍物局部坐标系求解）。
+ * 矩形中心 (x,z)、旋转 rotationY、局部轴半宽/半深；返回是否相交（含端点）。
+ */
+export function segmentHitsRotatedRect(
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  ob: { x: number; z: number; rotationY: number; halfWidth: number; halfDepth: number },
+): boolean {
+  const cosT = Math.cos(ob.rotationY);
+  const sinT = Math.sin(ob.rotationY);
+  // 线段端点变换到矩形局部坐标（逆旋转 + 平移）
+  const lax = (ax - ob.x) * cosT + (az - ob.z) * sinT;
+  const laz = -(ax - ob.x) * sinT + (az - ob.z) * cosT;
+  const lbx = (bx - ob.x) * cosT + (bz - ob.z) * sinT;
+  const lbz = -(bx - ob.x) * sinT + (bz - ob.z) * cosT;
+
+  // slab 求交：对 x/z 两个轴，计算线段参数 t 的可行区间
+  let t0 = 0;
+  let t1 = 1;
+  const axes: Array<{ d0: number; d1: number; half: number }> = [
+    { d0: lax, d1: lbx, half: ob.halfWidth },
+    { d0: laz, d1: lbz, half: ob.halfDepth },
+  ];
+  for (const { d0, d1, half } of axes) {
+    const delta = d1 - d0;
+    // 线段在该轴无分量：起点本身必须在范围内
+    if (Math.abs(delta) < 1e-12) {
+      if (Math.abs(d0) > half) return false;
+      continue;
+    }
+    const ta = (-half - d0) / delta;
+    const tb = (half - d0) / delta;
+    t0 = Math.max(t0, Math.min(ta, tb));
+    t1 = Math.min(t1, Math.max(ta, tb));
+    if (t0 > t1) return false;
+  }
+  return t0 <= 1 && t1 >= 0;
+}
+
+/** 线段垂直范围与障碍物高度带是否重叠 */
+export function segmentYOverlaps(
+  y0: number,
+  y1: number,
+  ob: { centerY: number; halfHeight: number },
+): boolean {
+  const yMin = ob.centerY - ob.halfHeight;
+  const yMax = ob.centerY + ob.halfHeight;
+  return Math.max(y0, y1) >= yMin && Math.min(y0, y1) <= yMax;
 }

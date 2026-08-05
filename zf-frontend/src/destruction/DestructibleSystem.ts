@@ -1,12 +1,15 @@
 import * as THREE from 'three';
+import { DESTRUCTIBLE_KIND_CONFIGS } from '../../shared/protocol';
 
 /**
- * 局部破坏系统（阶段 7 P0）。
+ * 局部破坏系统（阶段 7 P0，阶段 8 接入服务端权威状态）。
  * 采用“预切片/状态切换”，不做任意体素破坏：
  * - 完整对象（intact）参与碰撞与 AI 视线遮挡；被摧毁后隐藏并移出遮挡列表；
  * - 碎片（broken）仅客户端表现，不进入长期同步；
  * - 破坏状态使用稳定对象 ID + bitset 表达，`getStateBitset` / `applyStateBitset`
- *   便于网络同步（阶段 8 接入快照时直接复用）。
+ *   供网络同步使用（联网模式：服务端 destructible_state 广播驱动，只破坏不回滚；
+ *   新回合经 `reset` 恢复完整）。
+ * - 类型/血量/尺寸配置来自 shared `DESTRUCTIBLE_KIND_CONFIGS`（服务端裁决同源，防漂移）。
  */
 export enum DestructibleKind {
   DOOR = 'door',
@@ -23,12 +26,10 @@ export interface DestructibleConfig {
   dimensions: { width: number; height: number; depth: number };
 }
 
-export const DESTRUCTIBLE_CONFIGS: Record<DestructibleKind, DestructibleConfig> = {
-  [DestructibleKind.DOOR]: { kind: DestructibleKind.DOOR, name: '木门', health: 60, dimensions: { width: 1.2, height: 2.4, depth: 0.15 } },
-  [DestructibleKind.SANDBAG]: { kind: DestructibleKind.SANDBAG, name: '沙袋', health: 150, dimensions: { width: 2, height: 1, depth: 1 } },
-  [DestructibleKind.FENCE]: { kind: DestructibleKind.FENCE, name: '木栅栏', health: 40, dimensions: { width: 3, height: 1.2, depth: 0.1 } },
-  [DestructibleKind.COVER]: { kind: DestructibleKind.COVER, name: '小型掩体', health: 200, dimensions: { width: 1.5, height: 1.2, depth: 1.5 } },
-};
+/** 破坏物配置（shared 同源：服务端裁决血量/挡弹尺寸与客户端渲染共用） */
+export const DESTRUCTIBLE_CONFIGS: Record<DestructibleKind, DestructibleConfig> = DESTRUCTIBLE_KIND_CONFIGS as unknown as Record<DestructibleKind, DestructibleConfig>;
+/** 每类对象点位布局（服务端权威同源，联网场景破坏物与裁决对象一一对应） */
+export { DESTRUCTIBLE_SPAWN_DEFS } from '../../shared/protocol';
 
 /** 每类对象的颜色基线（沙袋/木料/混凝土） */
 const KIND_COLORS: Record<DestructibleKind, number> = {
@@ -129,6 +130,22 @@ export class DestructibleSystem {
         this.destroy(this.objects[i].id);
       }
     }
+  }
+
+  /** 回合重置：全部恢复完整（联网新回合开始时调用，清除碎片表现） */
+  reset(): void {
+    for (const obj of this.objects) {
+      obj.destroyed = false;
+      obj.health = obj.config.health;
+      obj.mesh.visible = true;
+      obj.brokenGroup.visible = false;
+    }
+    for (const d of this.debris) {
+      this.scene.remove(d.mesh);
+      d.mesh.geometry.dispose();
+      (d.mesh.material as THREE.Material).dispose();
+    }
+    this.debris = [];
   }
 
   getById(id: number): DestructibleObject | null {

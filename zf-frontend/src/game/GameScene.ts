@@ -39,7 +39,7 @@ import { WeatherMaterialLink } from '../environment/WeatherMaterialLink';
 import { VfxPool, VfxType } from '../effects/VfxPool';
 import { ExplosionImpactSystem } from '../effects/ExplosionImpact';
 import { DynamicResolution } from '../performance/DynamicResolution';
-import { DestructibleSystem, DestructibleKind } from '../destruction/DestructibleSystem';
+import { DestructibleSystem, DestructibleKind, DESTRUCTIBLE_SPAWN_DEFS } from '../destruction/DestructibleSystem';
 import type { GameEvents } from './GameEvents';
 import { GameMode, GameModeType } from './GameMode';
 import { ConquestPresenter } from './ConquestPresenter';
@@ -128,6 +128,8 @@ export class GameScene {
   private roundOverlay: HTMLElement | null = null;
   /** 新回合开始的客户端时间戳（结算倒计时基准；0 = 无进行中的结算） */
   private roundEndAt = 0;
+  /** 最近一次 room_state 阶段（新回合检测：ended → started 触发本地破坏物/场景重置） */
+  private lastRoomPhase = '';
   /**
    * 本地预测（联网模式）：输入发送时自动推进、快照按 ackSeq 校正；
    * 每帧把本地玩家渲染位置向预测轨迹平滑收敛（服务端权威移动，无碰撞模型的水平偏差由校正吸收）。
@@ -632,21 +634,11 @@ export class GameScene {
     }
   }
 
-  /** 在地图散布可破坏对象（避开出生点/载具点），完整对象参与碰撞与 AI 视线 */
+  /** 在地图散布可破坏对象（服务端权威布局同源，避开出生点/载具点），完整对象参与碰撞与 AI 视线 */
   private spawnDestructibles(): void {
-    const placements: { kind: DestructibleKind; x: number; z: number; rotationY: number }[] = [
-      { kind: DestructibleKind.SANDBAG, x: 8, z: -22, rotationY: 0.4 },
-      { kind: DestructibleKind.SANDBAG, x: -9, z: 20, rotationY: -0.3 },
-      { kind: DestructibleKind.COVER, x: 24, z: -6, rotationY: 0.8 },
-      { kind: DestructibleKind.COVER, x: -25, z: 8, rotationY: -0.6 },
-      { kind: DestructibleKind.FENCE, x: 30, z: 22, rotationY: 1.2 },
-      { kind: DestructibleKind.FENCE, x: -30, z: -20, rotationY: -1.1 },
-      { kind: DestructibleKind.DOOR, x: 6, z: 28, rotationY: 0 },
-      { kind: DestructibleKind.DOOR, x: -6, z: -28, rotationY: 0 },
-    ];
-    for (const placement of placements) {
+    for (const placement of DESTRUCTIBLE_SPAWN_DEFS) {
       const obj = this.destructibleSystem.create(
-        placement.kind,
+        placement.kind as DestructibleKind,
         new THREE.Vector3(placement.x, 0, placement.z),
         placement.rotationY,
       );
@@ -961,6 +953,22 @@ export class GameScene {
     this.networkVehicles = new NetworkVehicles(this.scene);
     this.networkGameClient.onVehicleState = (state) => {
       this.networkVehicles?.applyState(state);
+    };
+    // 联网破坏：服务端权威 destructible_state（bitset）驱动，客户端只破坏不回滚
+    this.networkGameClient.onDestructibleState = (msg) => {
+      this.destructibleSystem.applyStateBitset(msg.bits);
+    };
+    // 新回合检测：room_state phase ended → started（回合重启广播）→ 本地破坏物/结算遮罩重置
+    this.networkGameClient.onRoomState = (state) => {
+      const phase = state.phase;
+      if (this.lastRoomPhase === 'ended' && phase === 'started') {
+        this.destructibleSystem.reset();
+        // 回合重置：被破坏对象重新参与碰撞与 AI 视线
+        for (const obj of this.destructibleSystem.getAll()) {
+          if (!this.environmentObjects.includes(obj.mesh)) this.environmentObjects.push(obj.mesh);
+        }
+      }
+      this.lastRoomPhase = phase;
     };
     // 联网模式不使用本地单机载具（权威载具由服务端模拟驱动，客户端只做视觉）
     this.removeLocalVehicles();
@@ -1725,12 +1733,14 @@ export class GameScene {
       if (result.dust) this.spawnDustEffect(position.clone());
     }
 
-    // 破坏物 AoE（阶段 7）
-    for (const d of this.destructibleSystem.getAll()) {
-      if (d.destroyed) continue;
-      if (d.mesh.position.distanceTo(position) <= radius) {
-        if (this.destructibleSystem.damage(d.id, maxDamage, position)) {
-          this.hud.addKillMessage(`${d.config.name} 被炸毁`, this.simulationTimeMs);
+    // 破坏物 AoE（阶段 7；联网模式破坏由服务端权威 destructible_state 驱动，本地不裁决）
+    if (!this.networkGameClient) {
+      for (const d of this.destructibleSystem.getAll()) {
+        if (d.destroyed) continue;
+        if (d.mesh.position.distanceTo(position) <= radius) {
+          if (this.destructibleSystem.damage(d.id, maxDamage, position)) {
+            this.hud.addKillMessage(`${d.config.name} 被炸毁`, this.simulationTimeMs);
+          }
         }
       }
     }
@@ -1841,8 +1851,8 @@ export class GameScene {
       return;
     }
 
-    // 可破坏物命中（阶段 7）：摧毁后移出碰撞与 AI 视线
-    if (hitInfo.target) {
+    // 可破坏物命中（阶段 7）：摧毁后移出碰撞与 AI 视线；联网模式破坏由服务端权威裁决（本地只渲染）
+    if (hitInfo.target && !this.networkGameClient) {
       let obj: THREE.Object3D | null = hitInfo.target;
       while (obj) {
         const destructibleId = (obj.userData as { destructibleId?: number } | undefined)?.destructibleId;

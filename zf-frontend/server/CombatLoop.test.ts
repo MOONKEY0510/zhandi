@@ -15,9 +15,11 @@ import { NetClient, type RawTransport, type NetClientOptions } from '../src/netw
 import {
   RESPAWN_DELAY_MS,
   ROUND_RESTART_DELAY_MS,
+  DESTRUCTIBLE_SPAWN_DEFS,
   type JoinAck,
   type KillFeedMsg,
   type ServerGameState,
+  type DestructibleStateMsg,
 } from '../shared/protocol.ts';
 
 /** Node（ws 包）传输：实现 RawTransport（与 GameState.test 同构） */
@@ -262,5 +264,53 @@ describe('服务端权威战斗闭环（阶段 8 第十七批：死亡/重生/�
     expect(newState.tickets[1]).toBeGreaterThan(290);
     expect(await waitFor(() => bAlive === true, 3000)).toBe(true);
     expect(await waitFor(() => bNearSpawn, 3000)).toBe(true);
+  }, 30000);
+
+  it('破坏物权威化：射击沙袋 → destructible_state 广播（bitset 翻转），弹道被沙袋拦截不穿透', async () => {
+    const a = makeClient('da1');
+    const b = makeClient('db1');
+    const statesA: DestructibleStateMsg[] = [];
+    const statesB: DestructibleStateMsg[] = [];
+    a.onDestructibleState = (s) => statesA.push(s);
+    b.onDestructibleState = (s) => statesB.push(s);
+
+    await a.connect();
+    await b.connect();
+    const ackAPromise = waitJoinAck(a);
+    const ackBPromise = waitJoinAck(b);
+    a.joinRoom('destruct');
+    b.joinRoom('destruct');
+    const [ackA, ackB] = await Promise.all([ackAPromise, ackBPromise]);
+    expect(ackA.team).not.toBe(ackB.team);
+
+    // 射手=队 0 玩家（出生点 -20,-20）；沙袋 0 在 (8,-22)，血 150 / 步枪 25 伤 → 6 发摧毁
+    const shooterTeam = ackA.team === 0 ? ackA.team : ackB.team;
+    const shooter = ackA.team === 0 ? a : b;
+    const sx = spawnOf(shooterTeam).x; // -20（队0）
+    const sz = sx; // 出生点 z = x
+    const sandbag = DESTRUCTIBLE_SPAWN_DEFS[0];
+    const dx = sandbag.x - sx;
+    const dz = sandbag.z - sz;
+    const dist = Math.hypot(dx, dz);
+    // 弹道从眼睛高 1.6m 指向沙袋中心 0.5m（服务端弹丸 y 由 pitch 决定）
+    const aimYaw = Math.atan2(dx, -dz);
+    const aimPitch = Math.atan2(0.5 - 1.6, dist);
+
+    // 连射（30Hz 输入，fire=true；射速裁决 120ms 冷却 → 沙袋 150 血约 0.75s 摧毁）
+    const deadline = Date.now() + 8000;
+    let lastSend = 0;
+    while (Date.now() < deadline && !statesA.some((s) => s.bits[0] === '1')) {
+      if (Date.now() - lastSend >= 33) {
+        shooter.sendInput({ ...IDLE_INPUT, fire: true, aimYaw, aimPitch });
+        lastSend = Date.now();
+      }
+      await sleep(30);
+    }
+
+    // 双方均收到权威破坏状态：bitset 第 0 位翻转（沙袋已破坏）
+    expect(statesA.some((s) => s.bits[0] === '1')).toBe(true);
+    expect(statesB.some((s) => s.bits[0] === '1')).toBe(true);
+    // bitset 长度与布局一致（稳定 ID 位序）
+    expect(statesA[statesA.length - 1]?.bits.length).toBe(DESTRUCTIBLE_SPAWN_DEFS.length);
   }, 30000);
 });

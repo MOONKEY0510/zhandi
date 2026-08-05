@@ -12,6 +12,7 @@ import {
   INPUT_RATE_LIMIT_PER_SECOND,
   INPUT_BUFFER_WINDOW,
   PLAYER_EYE_HEIGHT,
+  BULLET_DAMAGE,
   RESPAWN_DELAY_MS,
   ROUND_RESTART_DELAY_MS,
   type NetworkMessage,
@@ -28,8 +29,9 @@ import { SimClock } from './SimClock.ts';
 import { RoomManager, type Room } from './RoomManager.ts';
 import { PlayerSim, type PlayerSimInput } from './PlayerSim.ts';
 import { VehicleSim } from './VehicleSim.ts';
-import { ProjectileSim, type ProjectileTarget } from './ProjectileSim.ts';
+import { ProjectileSim, type ProjectileTarget, type ProjectileObstacle } from './ProjectileSim.ts';
 import { ConquestSim, type ConquestPlayerRef } from './ConquestSim.ts';
+import { DestructibleSim } from './DestructibleSim.ts';
 
 export interface ServerAppOptions {
   port?: number;
@@ -204,6 +206,7 @@ export class ServerApp {
         // 首个玩家加入即开局（演示语义：房间创建即进入征服对局）
         room.conquest ??= new ConquestSim();
         room.vehicles ??= new VehicleSim();
+        room.destructibles ??= new DestructibleSim();
         if (room.phase === 'waiting') room.start();
         const teamSpawn = SPAWN[result.player.team];
         conn.sim = new PlayerSim(result.player.id, result.player.team, teamSpawn);
@@ -438,38 +441,67 @@ export class ServerApp {
         });
       }
     }
-    this.projectiles.step(deltaSeconds, targets, (hit) => {
-      // 命中载具（id 形如 v1/v2）：扣血 → 摧毁（清空司机 + 重生计时）
-      for (const room of this.roomManager.listRooms()) {
-        if (room.vehicles?.getVehicle(hit.targetId)) {
-          room.vehicles.takeDamage(hit.targetId, hit.damage);
-          return;
-        }
+    // 破坏物挡弹障碍（服务端权威：弹道与旋转矩形相交 → 弹丸消散 + 破坏物扣血；已破坏对象不挡弹）
+    const obstacles: ProjectileObstacle[] = [];
+    for (const room of this.roomManager.listRooms()) {
+      if (!room.destructibles) continue;
+      for (const ob of room.destructibles.obstacles()) {
+        obstacles.push({ ...ob, roomId: room.id });
       }
-      const targetConn = this.findConnection(hit.targetId);
-      if (targetConn?.sim) {
-        const wasAlive = targetConn.sim.state.alive;
-        targetConn.sim.takeDamage(hit.damage, this.clock.nowMs());
-        // 死亡翻转：广播击杀事件（kill_feed 即时反馈）+ 服务端权威扣兵力/记击杀
-        if (wasAlive && !targetConn.sim.state.alive) {
-          const room = targetConn.roomId ? this.roomManager.getRoom(targetConn.roomId) : null;
-          const shooterConn = this.findConnection(hit.ownerId);
-          if (room) {
-            this.broadcastToRoom(room.id, {
-              kind: 'kill_feed',
-              killerId: hit.ownerId,
-              killerName: shooterConn?.displayName || '未知',
-              victimId: hit.targetId,
-              victimName: targetConn.displayName || hit.targetId,
-              weaponLabel: hit.label,
-            });
-          }
-          if (room?.conquest && shooterConn?.sim) {
-            room.conquest.onPlayerKilled(targetConn.sim.state.team, shooterConn.sim.state.team);
+    }
+    this.projectiles.step(
+      deltaSeconds,
+      targets,
+      (hit) => {
+        // 命中载具（id 形如 v1/v2）：扣血 → 摧毁（清空司机 + 重生计时）
+        for (const room of this.roomManager.listRooms()) {
+          if (room.vehicles?.getVehicle(hit.targetId)) {
+            room.vehicles.takeDamage(hit.targetId, hit.damage);
+            return;
           }
         }
-      }
-    });
+        const targetConn = this.findConnection(hit.targetId);
+        if (targetConn?.sim) {
+          const wasAlive = targetConn.sim.state.alive;
+          targetConn.sim.takeDamage(hit.damage, this.clock.nowMs());
+          // 死亡翻转：广播击杀事件（kill_feed 即时反馈）+ 服务端权威扣兵力/记击杀
+          if (wasAlive && !targetConn.sim.state.alive) {
+            const room = targetConn.roomId ? this.roomManager.getRoom(targetConn.roomId) : null;
+            const shooterConn = this.findConnection(hit.ownerId);
+            if (room) {
+              this.broadcastToRoom(room.id, {
+                kind: 'kill_feed',
+                killerId: hit.ownerId,
+                killerName: shooterConn?.displayName || '未知',
+                victimId: hit.targetId,
+                victimName: targetConn.displayName || hit.targetId,
+                weaponLabel: hit.label,
+              });
+            }
+            if (room?.conquest && shooterConn?.sim) {
+              room.conquest.onPlayerKilled(targetConn.sim.state.team, shooterConn.sim.state.team);
+            }
+          }
+        }
+      },
+      obstacles,
+      (hit) => {
+        // 破坏物挡弹：弹丸消散 + 破坏物受击 → 状态变化时广播 destructible_state
+        const room = this.roomManager.getRoom(hit.roomId ?? '');
+        if (!room?.destructibles) return;
+        room.destructibles.damage(hit.obstacleId, BULLET_DAMAGE);
+        const bits = room.destructibles.getBitset();
+        if (bits !== room.lastDestructibleBits) {
+          room.lastDestructibleBits = bits;
+          this.broadcastToRoom(room.id, {
+            kind: 'destructible_state',
+            roomId: room.id,
+            tick: this.clock.tick,
+            bits,
+          });
+        }
+      },
+    );
 
     // 征服规则推进（服务端权威：占点 / 兵力流失 / 胜负判定）
     for (const room of this.roomManager.listRooms()) {
@@ -586,10 +618,12 @@ export class ServerApp {
     };
   }
 
-  /** 新回合：重置征服/载具权威模拟 + 全员队伍出生点复活 + 立即广播 room_state/game_state */
+  /** 新回合：重置征服/载具/破坏物权威模拟 + 全员队伍出生点复活 + 立即广播 room_state/game_state/destructible_state */
   private restartRound(room: Room): void {
     room.conquest = new ConquestSim();
     room.vehicles = new VehicleSim();
+    room.destructibles = new DestructibleSim();
+    room.lastDestructibleBits = room.destructibles.getBitset();
     room.phase = 'started';
     room.roundEndAtMs = null;
     for (const p of room.players) {
@@ -604,6 +638,15 @@ export class ServerApp {
     this.broadcastToRoom(room.id, this.buildRoomState(room));
     if (room.conquest) {
       this.broadcastToRoom(room.id, room.conquest.getState(room.id, room.phaseLabel, this.clock.tick, this.clock.nowMs()));
+    }
+    if (room.destructibles) {
+      // 新回合破坏物全恢复：广播全 0 bitset，客户端据此恢复完整状态
+      this.broadcastToRoom(room.id, {
+        kind: 'destructible_state',
+        roomId: room.id,
+        tick: this.clock.tick,
+        bits: room.destructibles.getBitset(),
+      });
     }
   }
 

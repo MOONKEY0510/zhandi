@@ -13,6 +13,7 @@ import {
 } from '../shared/protocol.ts';
 import type { ConquestSim } from './ConquestSim.ts';
 import type { VehicleSim } from './VehicleSim.ts';
+import type { DestructibleSim } from './DestructibleSim.ts';
 
 export interface RoomPlayer {
   id: string;
@@ -49,6 +50,10 @@ export class Room {
   conquest: ConquestSim | null = null;
   /** 服务端权威载具模拟（首个玩家加入时由 ServerApp 创建） */
   vehicles: VehicleSim | null = null;
+  /** 服务端权威破坏模拟（首个玩家加入时由 ServerApp 创建） */
+  destructibles: DestructibleSim | null = null;
+  /** 已广播的破坏 bitset（状态变化去重；回合重置时重置为全 0） */
+  lastDestructibleBits = '';
   /** 回合结束时刻（ms）：phase='ended' 时经 ROUND_RESTART_DELAY_MS 自动开新回合（null = 无重启计划） */
   roundEndAtMs: number | null = null;
   /** 单调递增的槽位计数器 */

@@ -14,6 +14,7 @@ import {
   type VehicleDrive,
   type VehicleFire,
   type KillFeedMsg,
+  type DestructibleStateMsg,
 } from './protocol.ts';
 
 function roundTrip<T extends NetworkMessage>(msg: T): T {
@@ -189,5 +190,15 @@ describe('codec（阶段 8 二进制协议）', () => {
     // 环境击杀：killerId=null → 空字符串往返还原
     const env: KillFeedMsg = { ...feed, killerId: null, killerName: '未知' };
     expect(roundTrip(env)).toEqual(env);
+  });
+
+  it('destructible_state 往返一致（bitset 破坏状态）', () => {
+    const msg: DestructibleStateMsg = {
+      kind: 'destructible_state',
+      roomId: 'room-1',
+      tick: 42,
+      bits: '10100001',
+    };
+    expect(roundTrip(msg)).toEqual(msg);
   });
 });

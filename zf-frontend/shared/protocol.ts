@@ -59,6 +59,7 @@ export type MessageKind =
   | 'vehicle_drive'
   | 'vehicle_fire'
   | 'kill_feed'
+  | 'destructible_state'
   | 'ping'
   | 'pong'
   | 'error';
@@ -189,6 +190,43 @@ export const VEHICLE_SPAWN_DEFS = [
 ] as const;
 
 export type VehicleSpawnDef = (typeof VEHICLE_SPAWN_DEFS)[number];
+
+/** 破坏物类型（网络编码与客户端 DestructibleKind 字符串一致） */
+export type DestructibleKindNet = 'door' | 'sandbag' | 'fence' | 'cover';
+
+export interface DestructibleKindConfig {
+  kind: DestructibleKindNet;
+  /** 显示名 */
+  name: string;
+  health: number;
+  /** 近似碰撞盒尺寸（m），供破坏判定/弹道挡弹/碎片生成使用 */
+  dimensions: { width: number; height: number; depth: number };
+}
+
+/** 服务端权威破坏物配置（shared 同源：服务端裁决 + 客户端渲染/碰撞共用，防漂移） */
+export const DESTRUCTIBLE_KIND_CONFIGS: Record<DestructibleKindNet, DestructibleKindConfig> = {
+  door: { kind: 'door', name: '木门', health: 60, dimensions: { width: 1.2, height: 2.4, depth: 0.15 } },
+  sandbag: { kind: 'sandbag', name: '沙袋', health: 150, dimensions: { width: 2, height: 1, depth: 1 } },
+  fence: { kind: 'fence', name: '木栅栏', health: 40, dimensions: { width: 3, height: 1.2, depth: 0.1 } },
+  cover: { kind: 'cover', name: '小型掩体', health: 200, dimensions: { width: 1.5, height: 1.2, depth: 1.5 } },
+};
+
+/**
+ * 服务端权威破坏物点位（联网场景视觉与服务端裁决同源；避开出生点/载具点/据点）。
+ * id 为数组索引（稳定，bitset 位序与此一致）。
+ */
+export const DESTRUCTIBLE_SPAWN_DEFS = [
+  { id: 0, kind: 'sandbag' as DestructibleKindNet, x: 8, z: -22, rotationY: 0.4 },
+  { id: 1, kind: 'sandbag' as DestructibleKindNet, x: -9, z: 20, rotationY: -0.3 },
+  { id: 2, kind: 'cover' as DestructibleKindNet, x: 24, z: -6, rotationY: 0.8 },
+  { id: 3, kind: 'cover' as DestructibleKindNet, x: -25, z: 8, rotationY: -0.6 },
+  { id: 4, kind: 'fence' as DestructibleKindNet, x: 30, z: 22, rotationY: 1.2 },
+  { id: 5, kind: 'fence' as DestructibleKindNet, x: -30, z: -20, rotationY: -1.1 },
+  { id: 6, kind: 'door' as DestructibleKindNet, x: 6, z: 28, rotationY: 0 },
+  { id: 7, kind: 'door' as DestructibleKindNet, x: -6, z: -28, rotationY: 0 },
+] as const;
+
+export type DestructibleSpawnDef = (typeof DESTRUCTIBLE_SPAWN_DEFS)[number];
 
 /** 载具武器定义（服务端裁决冷却/伤害/弹道；客户端按 cooldownMs 节流发送开火请求） */
 export interface VehicleWeaponDef {
@@ -337,6 +375,14 @@ export interface KillFeedMsg {
   weaponLabel: string;
 }
 
+/** 服务端权威破坏状态（bitset 字符串：'1'=已破坏；状态变化/回合重置时广播，客户端只破坏不回滚） */
+export interface DestructibleStateMsg {
+  kind: 'destructible_state';
+  roomId: string;
+  tick: number;
+  bits: string;
+}
+
 export interface Ping {
   kind: 'ping';
   clientTime: number;
@@ -370,6 +416,7 @@ export type NetworkMessage =
   | VehicleDrive
   | VehicleFire
   | KillFeedMsg
+  | DestructibleStateMsg
   | Ping
   | Pong
   | ErrorMsg;

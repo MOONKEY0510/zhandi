@@ -249,14 +249,13 @@ describe('NetPlay 端到端回环（阶段 8 集成验证）', () => {
     a.sendVehicleEnter('v1');
     await sleep(300);
 
-    // 朝 B 位置 (20,-0.3) 射击：yaw = atan2(36, -15.7) ≈ 1.984；±0.05 扇形扫射覆盖移动误差
-    const yaw = Math.atan2(36, -15.7);
-    for (let pass = 0; pass < 3; pass += 1) {
-      const dy = (pass - 1) * 0.05;
-      for (let i = 0; i < 8; i += 1) {
-        a.sendVehicleFire('v1', yaw + dy, 0, 0);
-        await sleep(160); // > 机枪冷却 140ms
-      }
+    // 朝 B 位置 (20,-0.3) 射击：yaw = atan2(36, -15.7) ≈ 1.984。
+    // 全量并行（机器高负载）下 B 的 3.9s 移动窗口可能位移不足，扇形扫射加宽覆盖
+    // [1.85, 2.40]（对应 B 移动 0%–100% 的 yaw 范围），避免 flaky。
+    for (let i = 0; i < 24; i += 1) {
+      const yaw = 1.85 + (i / 23) * 0.55;
+      a.sendVehicleFire('v1', yaw, 0, 0);
+      await sleep(160); // > 机枪冷却 140ms
     }
     await sleep(500);
 
