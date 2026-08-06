@@ -23,6 +23,7 @@ export type SeatSwitchCallback = () => void;
 export type ScoreboardCallback = (visible: boolean) => void;
 export type EscapeCallback = () => void;
 export type WeatherToggleCallback = () => void;
+export type MeleeCallback = () => void;
 
 export class InputManager {
   private keys: Set<string> = new Set();
@@ -39,6 +40,7 @@ export class InputManager {
   private scoreboardCallbacks: ScoreboardCallback[] = [];
   private escapeCallbacks: EscapeCallback[] = [];
   private weatherToggleCallbacks: WeatherToggleCallback[] = [];
+  private meleeCallbacks: MeleeCallback[] = [];
 
   public state: InputState = {
     forward: false, backward: false, left: false, right: false,
@@ -102,6 +104,10 @@ export class InputManager {
     // 天气切换 T
     if (actions.includes('weather') && !this.keys.has(e.code)) {
       this.weatherToggleCallbacks.forEach(cb => cb());
+    }
+    // 近战 V
+    if (actions.includes('melee') && !this.keys.has(e.code)) {
+      this.meleeCallbacks.forEach(cb => cb());
     }
     // Esc 设置
     if (actions.includes('escape')) {
@@ -207,6 +213,8 @@ export class InputManager {
   onScoreboard(cb: ScoreboardCallback): void { this.scoreboardCallbacks.push(cb); }
   onEscape(cb: EscapeCallback): void { this.escapeCallbacks.push(cb); }
   onWeatherToggle(cb: WeatherToggleCallback): void { this.weatherToggleCallbacks.push(cb); }
+
+  onMelee(cb: MeleeCallback): void { this.meleeCallbacks.push(cb); }
 
   private notifyWeaponSwitch(slot: number): void {
     this.weaponSwitchCallbacks.forEach(cb => cb(slot));

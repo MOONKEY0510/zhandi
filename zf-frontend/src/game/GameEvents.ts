@@ -9,7 +9,7 @@ export interface GameEvents {
     time: number;
   };
   'combat:kill': {
-    source: 'weapon' | 'equipment';
+    source: 'weapon' | 'equipment' | 'melee';
     label: string;
     headshot: boolean;
     victimTeam: TeamId;

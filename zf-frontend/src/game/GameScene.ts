@@ -231,6 +231,9 @@ export class GameScene {
   private suppressionTimer = 0;
   private readonly suppressionDecay = 2.5;
 
+  // 阶段 10+：近战攻击冷却（500ms）
+  private meleeCooldown = 0;
+
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
   /** 反坦克地雷（阶段 7 P1） */
@@ -949,6 +952,10 @@ export class GameScene {
       const current = this.weatherSystem.getCurrentWeather();
       const idx = weathers.indexOf(current);
       this.weatherSystem.setWeather(weathers[(idx + 1) % weathers.length]);
+    });
+
+    this.inputManager.onMelee(() => {
+      this.handleMelee();
     });
   }
 
@@ -1712,6 +1719,71 @@ export class GameScene {
       // 阶段 10 P1：训练投掷步骤
       this.handleTrainingProgress('grenade');
     }
+  }
+
+  /** 近战攻击：V 键，射线检测前方 2.5m 内 AI，Kar98k + 冲刺 = 刺刀冲锋（×3 伤害） */
+  private handleMelee(): void {
+    const now = this.simulationTimeMs;
+    if (this.healthSystem.isDead) return;
+    if (this.inVehicle) return;
+    if (now - this.meleeCooldown < 500) return;
+    this.meleeCooldown = now;
+
+    const weapon = this.weaponSystem.getCurrentWeapon();
+    const isSprinting = this.inputManager.state.sprint;
+    const isBayonet = weapon.config.type === WeaponType.BOLT_RIFLE && isSprinting;
+    const damage = isBayonet ? 120 : 40;
+    const range = isBayonet ? 3.0 : 2.5;
+
+    const origin = this.camera.getWorldPosition(this.tmpVec1);
+    const dir = this.tmpVec2;
+    this.camera.getWorldDirection(dir);
+
+    const raycaster = new THREE.Raycaster(origin, dir, 0, range);
+    const targets: THREE.Object3D[] = [];
+    for (const bot of this.aiSystem.bots) {
+      if (bot.state !== 'dead') targets.push(bot.mesh);
+    }
+    const hits = raycaster.intersectObjects(targets, true);
+
+    this.audioSystem.play(SoundType.HIT);
+
+    if (hits.length > 0) {
+      let hitBot: AIBot | null = null;
+      for (const bot of this.aiSystem.bots) {
+        if (bot.state === 'dead') continue;
+        if (bot.mesh === hits[0].object || this.isMeshChildOf(bot.mesh, hits[0].object)) {
+          hitBot = bot;
+          break;
+        }
+      }
+      if (hitBot) {
+        const killed = hitBot.takeDamage(damage, hits[0].point, now);
+        if (killed) {
+          this.events.emit('combat:kill', {
+            source: 'melee',
+            label: isBayonet ? '刺刀冲锋击杀 AI' : '近战击杀 AI',
+            headshot: false,
+            victimTeam: hitBot.team,
+            victimId: `bot_${this.aiSystem.bots.indexOf(hitBot)}`,
+            time: now,
+          });
+        }
+      }
+    }
+
+    this.hud.addKillMessage(isBayonet ? '刺刀冲锋！' : '近战攻击', now);
+    this.player?.addShake(0.02, 2);
+  }
+
+  /** 检查 mesh 是否为目标组的子节点（含递归） */
+  private isMeshChildOf(parent: THREE.Object3D, child: THREE.Object3D): boolean {
+    let node: THREE.Object3D | null = child;
+    while (node) {
+      if (node === parent) return true;
+      node = node.parent;
+    }
+    return false;
   }
 
   /** 放置反坦克地雷：上限由 MineSystem 按队伍控制 */
