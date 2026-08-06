@@ -2,10 +2,15 @@ export enum SoundType {
   GUNSHOT = 'gunshot',
   RELOAD = 'reload',
   FOOTSTEP = 'footstep',
+  FOOTSTEP_CONCRETE = 'footstep_concrete',
+  FOOTSTEP_SNOW = 'footstep_snow',
+  FOOTSTEP_SAND = 'footstep_sand',
+  FOOTSTEP_DIRT = 'footstep_dirt',
   EXPLOSION = 'explosion',
   TINNITUS = 'tinnitus',
   HIT = 'hit',
   DEATH = 'death',
+  KILL_CONFIRM = 'kill_confirm',
   AMBIENT = 'ambient',
   UI_CLICK = 'ui_click',
   UI_HOVER = 'ui_hover',
@@ -56,6 +61,46 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     rolloffFactor: 1,
     category: 'sfx',
   },
+  [SoundType.FOOTSTEP_CONCRETE]: {
+    type: SoundType.FOOTSTEP_CONCRETE,
+    url: '/sounds/footstep_concrete.mp3',
+    volume: 0.45,
+    loop: false,
+    spatial: true,
+    maxDistance: 20,
+    rolloffFactor: 1,
+    category: 'sfx',
+  },
+  [SoundType.FOOTSTEP_SNOW]: {
+    type: SoundType.FOOTSTEP_SNOW,
+    url: '/sounds/footstep_snow.mp3',
+    volume: 0.35,
+    loop: false,
+    spatial: true,
+    maxDistance: 20,
+    rolloffFactor: 1,
+    category: 'sfx',
+  },
+  [SoundType.FOOTSTEP_SAND]: {
+    type: SoundType.FOOTSTEP_SAND,
+    url: '/sounds/footstep_sand.mp3',
+    volume: 0.35,
+    loop: false,
+    spatial: true,
+    maxDistance: 20,
+    rolloffFactor: 1,
+    category: 'sfx',
+  },
+  [SoundType.FOOTSTEP_DIRT]: {
+    type: SoundType.FOOTSTEP_DIRT,
+    url: '/sounds/footstep_dirt.mp3',
+    volume: 0.38,
+    loop: false,
+    spatial: true,
+    maxDistance: 20,
+    rolloffFactor: 1,
+    category: 'sfx',
+  },
   [SoundType.EXPLOSION]: {
     type: SoundType.EXPLOSION,
     url: '/sounds/explosion.mp3',
@@ -94,6 +139,16 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     spatial: true,
     maxDistance: 50,
     rolloffFactor: 1,
+    category: 'sfx',
+  },
+  [SoundType.KILL_CONFIRM]: {
+    type: SoundType.KILL_CONFIRM,
+    url: '/sounds/kill_confirm.mp3',
+    volume: 0.6,
+    loop: false,
+    spatial: false,
+    maxDistance: 0,
+    rolloffFactor: 0,
     category: 'sfx',
   },
   [SoundType.AMBIENT]: {
@@ -167,6 +222,11 @@ export class AudioSystem {
     this.sounds.set(SoundType.RELOAD, this.createClickSound(0.3, 200));
     // 脚步：低频短噪声
     this.sounds.set(SoundType.FOOTSTEP, this.createNoiseBurst(0.05, 150, 0.3));
+    // 脚步变体：按地表材质区分（混凝土硬/雪地软/沙地散/泥土钝）
+    this.sounds.set(SoundType.FOOTSTEP_CONCRETE, this.createNoiseBurst(0.06, 250, 0.35));
+    this.sounds.set(SoundType.FOOTSTEP_SNOW, this.createNoiseBurst(0.08, 80, 0.22));
+    this.sounds.set(SoundType.FOOTSTEP_SAND, this.createNoiseBurst(0.07, 120, 0.25));
+    this.sounds.set(SoundType.FOOTSTEP_DIRT, this.createNoiseBurst(0.06, 160, 0.28));
     // 爆炸：长噪声 + 低频
     this.sounds.set(SoundType.EXPLOSION, this.createNoiseBurst(0.8, 200, 1.0));
     // 耳鸣：近距爆炸后的高频下降鸣响
@@ -175,6 +235,8 @@ export class AudioSystem {
     this.sounds.set(SoundType.HIT, this.createTone(0.08, 600, 0.5));
     // 死亡：下降音调
     this.sounds.set(SoundType.DEATH, this.createSweepTone(0.5, 400, 80, 0.7));
+    // 击杀确认：短促双音上升
+    this.sounds.set(SoundType.KILL_CONFIRM, this.createKillConfirm());
     // 环境音：低频持续噪声
     this.sounds.set(SoundType.AMBIENT, this.createAmbient());
     // UI 点击
@@ -250,6 +312,27 @@ export class AudioSystem {
         sample = Math.sin(2 * Math.PI * freq * 1.2 * t) * envelope * 0.8;
       }
       data[i] = sample * 0.5;
+    }
+
+    return buffer;
+  }
+
+  /** 击杀确认：短促双音上升（400Hz→800Hz + 600Hz→1200Hz，150ms） */
+  private createKillConfirm(): AudioBuffer {
+    const ctx = this.audioContext!;
+    const duration = 0.15;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const progress = i / length;
+      const envelope = Math.pow(1 - progress, 2);
+      const freq1 = 400 + 400 * progress;
+      const freq2 = 600 + 600 * progress;
+      data[i] = (Math.sin(2 * Math.PI * freq1 * t) + Math.sin(2 * Math.PI * freq2 * t)) * envelope * 0.3;
     }
 
     return buffer;

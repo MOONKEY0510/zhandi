@@ -15,6 +15,7 @@ export type MapId = 'berlin_ruins' | 'ardennes' | 'normandy_beach' | 'training_r
 export class MapManager {
   scene: THREE.Scene;
   currentMap: BerlinRuins | TrainingRange | Ardennes | NormandyBeach | null = null;
+  private currentMapId: MapId = 'berlin_ruins';
   spawnPoints: SpawnPoint[] = [];
   private builtDefinition: BuiltMapData | null = null;
 
@@ -26,6 +27,8 @@ export class MapManager {
     if (this.currentMap) {
       this.currentMap.dispose();
     }
+
+    this.currentMapId = mapName as MapId;
 
     switch (mapName) {
       case 'berlin_ruins':
@@ -86,6 +89,10 @@ export class MapManager {
   getTrainingTargets(): THREE.Object3D[] {
     if (this.currentMap instanceof TrainingRange) return this.currentMap.getTargetMeshes();
     return [];
+  }
+
+  getCurrentMapId(): MapId {
+    return this.currentMapId;
   }
 
   dispose(): void {

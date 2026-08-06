@@ -186,6 +186,9 @@ export class HUD {
               <line x1="26" y1="26" x2="19" y2="19" stroke="#ffcc00" stroke-width="3.5"/>
             </svg>
           </div>
+          <div id="kill-confirm" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0; transition: opacity 0.1s; margin-top: 40px;">
+            <span style="font-size: 20px; font-weight: bold; color: #ffcc00; text-shadow: 0 0 6px rgba(255,200,0,0.5); letter-spacing: 0.1em;">击杀确认</span>
+          </div>
         </div>
       </div>
 
@@ -791,6 +794,16 @@ export class HUD {
   setSquadStatus(alive: number, total: number): void {
     const el = this.container.querySelector('#squad-status');
     if (el) el.textContent = `小队：存活 ${alive}/${total}`;
+  }
+
+  /** 阶段 10+ 扩展：击杀确认（中心偏下显示 + 短暂高亮） */
+  showKillConfirm(): void {
+    const el = this.container.querySelector('#kill-confirm') as HTMLElement | null;
+    if (!el) return;
+    el.style.opacity = '1';
+    setTimeout(() => {
+      el.style.opacity = '0';
+    }, 800);
   }
 
   /** 准星显隐（瞄具遮罩接管时隐藏） */

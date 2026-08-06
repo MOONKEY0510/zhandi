@@ -357,6 +357,8 @@ export class GameScene {
   private hitMarkerTime = 0;
   private hitMarkerHeadshotTime = 0;
   private lastFootstepTime = 0;
+  /** 阶段 10+ 扩展：按地图地表类型选择脚步音效 */
+  private footstepSurface: 'concrete' | 'snow' | 'sand' | 'dirt' = 'dirt';
   private footstepInterval = 350;
 
   // 复用向量
@@ -453,6 +455,9 @@ export class GameScene {
       this.gameMode?.addKill(this.playerId, 'bot');
       this.achievementSystem?.updateProgress(this.playerId, AchievementType.KILLS, 1);
       if (headshot) this.achievementSystem?.updateProgress(this.playerId, AchievementType.HEADSHOTS, 1);
+      // 阶段 10+ 扩展：击杀确认（HUD 图标 + 音效）
+      this.hud.showKillConfirm();
+      this.audioSystem.play(SoundType.KILL_CONFIRM);
       // 阶段 10 P1：回放录制击杀事件
       this.replayRecorder?.record('kill', label, {
         team: victimTeam === TeamId.AXIS ? 'A' : 'B',
@@ -617,6 +622,14 @@ export class GameScene {
     this.mapManager = new MapManager(this.scene);
     this.mapManager.loadMap(training ? 'training_range' : mapId);
     this.environmentObjects = this.mapManager.getCollisionObjects();
+    // 阶段 10+ 扩展：按地图选择脚步地表类型
+    const MAP_SURFACE: Record<string, 'concrete' | 'snow' | 'sand' | 'dirt'> = {
+      berlin_ruins: 'concrete',
+      ardennes: 'snow',
+      normandy_beach: 'sand',
+      training_range: 'dirt',
+    };
+    this.footstepSurface = MAP_SURFACE[training ? 'training_range' : mapId] ?? 'dirt';
 
     // 局部破坏（阶段 7 P0）：预切片对象加入碰撞与 AI 视线，摧毁后移除（训练场保持靶场干净，不布破坏物）
     this.destructibleSystem = new DestructibleSystem(this.scene);
@@ -930,6 +943,49 @@ export class GameScene {
         new THREE.Vector3(placement.x, 0, placement.z),
         placement.rotationY,
       );
+      this.environmentObjects.push(obj.mesh);
+    }
+    // 阶段 10+ 扩展：按地图追加额外破坏物（单机专属，提升战场氛围）
+    this.spawnMapDestructibleExtras();
+  }
+
+  /** 阶段 10+ 扩展：每张地图专属破坏物——柏林多掩体，阿登多栅栏，诺曼底多沙袋 */
+  private spawnMapDestructibleExtras(): void {
+    const extras: { kind: DestructibleKind; x: number; z: number; yaw: number }[] = [];
+    const map = this.mapManager.getCurrentMapId();
+
+    if (map === 'berlin_ruins') {
+      // 柏林：建筑废墟间的掩体 + 木门
+      extras.push(
+        { kind: DestructibleKind.COVER, x: -15, z: -15, yaw: 0.5 },
+        { kind: DestructibleKind.COVER, x: 18, z: 12, yaw: -0.3 },
+        { kind: DestructibleKind.DOOR, x: -18, z: 18, yaw: 0.8 },
+        { kind: DestructibleKind.SANDBAG, x: 20, z: -18, yaw: 0 },
+        { kind: DestructibleKind.SANDBAG, x: -20, z: -10, yaw: 0.6 },
+      );
+    } else if (map === 'ardennes') {
+      // 阿登：森林间木栅栏 + 雪地掩体
+      extras.push(
+        { kind: DestructibleKind.FENCE, x: -20, z: -25, yaw: 0.3 },
+        { kind: DestructibleKind.FENCE, x: 25, z: 20, yaw: -0.4 },
+        { kind: DestructibleKind.FENCE, x: -28, z: 15, yaw: 0.7 },
+        { kind: DestructibleKind.COVER, x: 15, z: -20, yaw: 0 },
+        { kind: DestructibleKind.SANDBAG, x: -15, z: 28, yaw: 0.5 },
+      );
+    } else if (map === 'normandy_beach') {
+      // 诺曼底：滩头沙袋 + 铁丝网栅栏
+      extras.push(
+        { kind: DestructibleKind.SANDBAG, x: 10, z: -25, yaw: 0 },
+        { kind: DestructibleKind.SANDBAG, x: -12, z: -28, yaw: 0.3 },
+        { kind: DestructibleKind.SANDBAG, x: 0, z: -30, yaw: 0 },
+        { kind: DestructibleKind.FENCE, x: 25, z: -15, yaw: 0.8 },
+        { kind: DestructibleKind.FENCE, x: -25, z: -12, yaw: -0.6 },
+        { kind: DestructibleKind.COVER, x: 20, z: 25, yaw: 0.4 },
+      );
+    }
+
+    for (const extra of extras) {
+      const obj = this.destructibleSystem.create(extra.kind, new THREE.Vector3(extra.x, 0, extra.z), extra.yaw);
       this.environmentObjects.push(obj.mesh);
     }
   }
@@ -3165,7 +3221,16 @@ export class GameScene {
     if (currentTime - this.lastFootstepTime >= interval) {
       this.lastFootstepTime = currentTime;
       const pos = this.player.getPosition();
-      if (pos) this.audioSystem.play(SoundType.FOOTSTEP, pos);
+      if (pos) {
+        // 阶段 10+ 扩展：按地图地表类型选择脚步音效
+        const SURFACE_SOUNDS: Record<string, SoundType> = {
+          concrete: SoundType.FOOTSTEP_CONCRETE,
+          snow: SoundType.FOOTSTEP_SNOW,
+          sand: SoundType.FOOTSTEP_SAND,
+          dirt: SoundType.FOOTSTEP_DIRT,
+        };
+        this.audioSystem.play(SURFACE_SOUNDS[this.footstepSurface] ?? SoundType.FOOTSTEP, pos);
+      }
     }
   }
 
