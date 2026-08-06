@@ -19,6 +19,7 @@ export enum AIState {
   CHASE = 'chase',
   ATTACK = 'attack',
   COVER = 'cover',
+  REVIVING = 'reviving',
   DEAD = 'dead',
 }
 
@@ -128,6 +129,8 @@ export class AIBot {
   squadMark: { position: THREE.Vector3; markedAt: number } | null = null;
   /** 查找标记位置附近敌人（GameScene 注入：返回敌方 bot mesh 或 null） */
   findMarkedEnemy: ((position: THREE.Vector3) => THREE.Object3D | null) | null = null;
+  /** 阶段 10+ 扩展：查找附近倒地队友（GameScene 注入：返回可复活 bot 列表） */
+  findDownedAllies: (() => AIBot[]) | null = null;
   /** 反载具目标（阶段 7 P1）：target 指向其 mesh 时生效 */
   targetVehicle: VehicleTarget | null = null;
   private targetIsVehicle = false;
@@ -142,6 +145,11 @@ export class AIBot {
   deathTime: number = 0;
   respawnTime: number = 10000;
   canRespawn: boolean = true;
+  /** 阶段 10+ 扩展：AI 复活队友（医护兵） */
+  reviveTarget: AIBot | null = null;
+  reviveProgress = 0;
+  reviveDuration = 3000; // 3 秒施法
+  isReviving = false;
 
   // 行走动画
   private walkPhase = 0;
@@ -281,9 +289,69 @@ export class AIBot {
       suppress: AIState.ATTACK,
       advance: AIState.CHASE,
       retreat: AIState.COVER,
-      revive: AIState.CHASE,
+      revive: AIState.REVIVING,
     };
     if (this.state !== AIState.DEAD) this.state = actions[decision.action];
+  }
+
+  /** 阶段 10+ 扩展：医护兵检查附近倒地队友，尝试复活 */
+  private checkReviveOpportunity(): void {
+    if (this.squadRole !== 'medic') return;
+    if (this.state === AIState.REVIVING || this.state === AIState.DEAD) return;
+    // 查找附近倒地队友（DEAD 状态且可复活）
+    const allies = this.findDownedAllies?.() ?? [];
+    for (const ally of allies) {
+      if (ally === this) continue;
+      if (ally.state !== AIState.DEAD) continue;
+      if (!ally.canRespawn) continue;
+      const dist = this.mesh.position.distanceTo(ally.mesh.position);
+      if (dist < 15) {
+        this.reviveTarget = ally;
+        this.reviveProgress = 0;
+        this.isReviving = true;
+        this.state = AIState.REVIVING;
+        this.target = null;
+        return;
+      }
+    }
+  }
+
+  /** 阶段 10+ 扩展：执行复活（3 秒施法，完成后目标复活 30% 血） */
+  private performRevive(deltaTime: number, _currentTime: number): void {
+    if (!this.reviveTarget || this.reviveTarget.state !== AIState.DEAD) {
+      this.cancelRevive();
+      return;
+    }
+    // 朝倒地队友走
+    const dir = this.reviveTarget.mesh.position.clone().sub(this.mesh.position);
+    const dist = dir.length();
+    if (dist > 2.5) {
+      dir.y = 0;
+      dir.normalize();
+      this.mesh.position.add(dir.multiplyScalar(this.moveSpeed * deltaTime * 0.5));
+      this.mesh.lookAt(this.reviveTarget.mesh.position);
+      this.isMoving = true;
+      return;
+    }
+    // 在施法范围内
+    this.isMoving = false;
+    this.reviveProgress += deltaTime * 1000;
+    if (this.reviveProgress >= this.reviveDuration) {
+      // 复活队友
+      this.reviveTarget.health = Math.floor(this.reviveTarget.maxHealth * 0.3);
+      this.reviveTarget.respawn();
+      this.reviveTarget = null;
+      this.reviveProgress = 0;
+      this.isReviving = false;
+      this.state = AIState.PATROL;
+    }
+  }
+
+  private cancelRevive(): void {
+    this.reviveTarget = null;
+    this.reviveProgress = 0;
+    this.isReviving = false;
+    if (this.state === AIState.REVIVING) this.state = AIState.PATROL;
   }
 
   // 头顶标识
@@ -711,6 +779,8 @@ export class AIBot {
         if (this.team !== AIBot.playerTeam && visible && !this.targetIsVehicle) {
           this.setTarget(this.scene.getObjectByName('player') ?? null);
         }
+        // 阶段 10+ 扩展：友方医护兵检查附近倒地队友
+        this.checkReviveOpportunity();
         break;
 
       case AIState.CHASE:
@@ -723,6 +793,10 @@ export class AIBot {
 
       case AIState.COVER:
         this.seekCover(deltaTime, currentTime, playerPosition);
+        break;
+
+      case AIState.REVIVING:
+        this.performRevive(deltaTime, currentTime);
         break;
     }
 

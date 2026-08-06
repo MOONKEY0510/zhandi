@@ -212,6 +212,7 @@ export class GameScene {
   private squadMarkExpiresAt = 0;
   /** 阶段 10+ 新特性：呼叫炮击冷却 */
   private artilleryCooldownUntil = 0;
+  private lastSquadStatusUpdate = 0;
   private readonly ARTILLERY_COOLDOWN = 45_000;
   private readonly ARTILLERY_RADIUS = 8;
   private readonly ARTILLERY_DAMAGE = 90;
@@ -747,7 +748,15 @@ export class GameScene {
 
     // 天气
     this.weatherSystem = new WeatherSystem(this.scene, this.ambientLight, this.dirLight);
-    this.weatherSystem.setWeather(this.config.benchmark.weather);
+    // 阶段 10+ 扩展：按地图设置默认天气（柏林=雾、阿登=雪、诺曼底=雨；训练场=晴）
+    const MAP_DEFAULT_WEATHER: Record<string, WeatherType> = {
+      berlin_ruins: WeatherType.FOG,
+      ardennes: WeatherType.SNOW,
+      normandy_beach: WeatherType.RAIN,
+      training_range: WeatherType.CLEAR,
+    };
+    const defaultWeather = MAP_DEFAULT_WEATHER[training ? 'training_range' : mapId] ?? WeatherType.CLEAR;
+    this.weatherSystem.setWeather(this.config.benchmark.weather !== WeatherType.CLEAR ? this.config.benchmark.weather : defaultWeather);
     this.weatherSystem.enableDayNightCycle(
       this.config.benchmark.enabled ? this.config.benchmark.dayNightCycle : true,
     );
@@ -836,6 +845,12 @@ export class GameScene {
           }
         }
         return null;
+      };
+      // 阶段 10+ 扩展：注入倒地队友查找回调（AI 复活用）
+      bot.findDownedAllies = () => {
+        return this.aiSystem.bots.filter(
+          (ally) => ally.team === bot.team && ally.state === 'dead' && ally.canRespawn && ally !== bot,
+        );
       };
     }
   }
@@ -1011,7 +1026,11 @@ export class GameScene {
       const weathers = Object.values(WeatherType);
       const current = this.weatherSystem.getCurrentWeather();
       const idx = weathers.indexOf(current);
-      this.weatherSystem.setWeather(weathers[(idx + 1) % weathers.length]);
+      const next = weathers[(idx + 1) % weathers.length];
+      this.weatherSystem.setWeather(next);
+      // 阶段 10+ 扩展：HUD 提示当前天气名
+      const WEATHER_LABELS: Record<string, string> = { clear: '晴', rain: '雨', snow: '雪', fog: '雾', sandstorm: '沙暴' };
+      this.hud.addKillMessage(`天气切换：${WEATHER_LABELS[next] ?? next}`, this.simulationTimeMs);
     });
 
     this.inputManager.onMelee(() => {
@@ -3348,6 +3367,14 @@ export class GameScene {
     // 阶段 10+ 新特性：压制效果衰减（每秒衰减 suppressionDecay，HUD 实时更新）
     this.suppressionTimer = Math.max(0, this.suppressionTimer - this.suppressionDecay * dt);
     this.hud.setSuppression(this.suppressionTimer);
+
+    // 阶段 10+ 扩展：小队状态 HUD（每 2 秒更新，避免高频 DOM 写入）
+    if (time - this.lastSquadStatusUpdate > 2000) {
+      this.lastSquadStatusUpdate = time;
+      const alive = this.aiSystem.bots.filter((b) => b.team === this.conquestMode.playerTeam && b.state !== 'dead').length;
+      const total = this.aiSystem.bots.filter((b) => b.team === this.conquestMode.playerTeam).length;
+      this.hud.setSquadStatus(alive, total);
+    }
 
     // 小队标记环旋转 + 过期（阶段 10+ 新特性）
     this.updateSquadMarker(time);

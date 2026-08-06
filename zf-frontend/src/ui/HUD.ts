@@ -225,6 +225,10 @@ export class HUD {
         <div id="score-text" style="font-size: 18px;">K: 0 / D: 0</div>
       </div>
 
+      <div id="squad-status" style="position: absolute; top: 170px; left: 20px; background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 5px; border-left: 3px solid #4488ff; font-size: 14px; opacity: 0.9;">
+        小队：存活 -/-
+      </div>
+
       <div id="conquest-container" style="position: absolute; top: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; align-items: center;">
         <div id="axis-tickets" style="background: rgba(255,68,68,0.3); padding: 8px 15px; border-radius: 5px; border: 2px solid #ff4444; text-align: center;">
           <div id="axis-tickets-label" style="font-size: 12px; color: #ff8888;">德军</div>
@@ -781,6 +785,12 @@ export class HUD {
       this.elements.scopeOverlay.style.opacity = scoped ? '1' : '0';
     }
     this.setCrosshairVisible(!scoped);
+  }
+
+  /** 阶段 10+ 扩展：小队状态（存活数/总数） */
+  setSquadStatus(alive: number, total: number): void {
+    const el = this.container.querySelector('#squad-status');
+    if (el) el.textContent = `小队：存活 ${alive}/${total}`;
   }
 
   /** 准星显隐（瞄具遮罩接管时隐藏） */
