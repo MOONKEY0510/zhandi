@@ -15,7 +15,9 @@ export type KeyActionId =
   | 'weapon_2'
   | 'weapon_3'
   | 'weapon_4'
+  | 'weapon_5'
   | 'equipment'
+  | 'prone'
   | 'grenade'
   | 'vehicle'
   | 'seat'
@@ -38,7 +40,9 @@ export const DEFAULT_KEY_BINDINGS: Readonly<KeyBindings> = {
   weapon_2: 'Digit2',
   weapon_3: 'Digit3',
   weapon_4: 'Digit4',
+  weapon_5: 'Digit5',
   equipment: 'KeyQ',
+  prone: 'KeyZ',
   grenade: 'KeyG',
   vehicle: 'KeyE',
   seat: 'KeyF',
@@ -61,7 +65,9 @@ export const KEY_ACTION_LABELS: Readonly<Record<KeyActionId, string>> = {
   weapon_2: '武器 2',
   weapon_3: '武器 3',
   weapon_4: '武器 4',
+  weapon_5: '副武器',
   equipment: '战术装备',
+  prone: '匍匐',
   grenade: '投掷物',
   vehicle: '进入/离开载具',
   seat: '切换座位',

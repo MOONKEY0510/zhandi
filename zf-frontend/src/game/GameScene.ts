@@ -225,6 +225,12 @@ export class GameScene {
   private reportDialog!: ReportDialog;
   private scoreboardPlayers: ReportablePlayer[] = [];
 
+  // 阶段 10+ 新特性：击杀回放 + 压制效果
+  private lastKillerPos: THREE.Vector3 | null = null;
+  private lastKillerYaw = 0;
+  private suppressionTimer = 0;
+  private readonly suppressionDecay = 2.5;
+
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
   /** 反坦克地雷（阶段 7 P1） */
@@ -2685,7 +2691,10 @@ export class GameScene {
       const closestPoint = origin.clone().add(direction.clone().multiplyScalar(projection));
       const distToRay = closestPoint.distanceTo(playerVec);
 
-      // 命中判定：射线距离玩家中心 < 0.6 米视为命中
+      // 命中判定：射线距离玩家中心 < 0.6 米视为命中；< 3 米触发压制
+      if (distToRay < 3 && !this.healthSystem.isDead) {
+        this.suppressionTimer = Math.min(1, this.suppressionTimer + 0.25);
+      }
       if (distToRay < 0.6) {
         // 命中概率受精度影响
         if (gameplayRandom() > bot.accuracy) return;
@@ -2709,6 +2718,12 @@ export class GameScene {
         this.player?.addShake(0.05, 3);
 
         if (killed) {
+          // 阶段 10+ 新特性：击杀回放——记录击杀者位置
+          this.lastKillerPos = bot.mesh.position.clone();
+          this.lastKillerYaw = Math.atan2(
+            bot.mesh.position.x - playerPos2!.x,
+            bot.mesh.position.z - playerPos2!.z,
+          );
           this.handlePlayerDeath(currentTime);
         }
       }
@@ -2744,13 +2759,25 @@ export class GameScene {
     this.events.emit('ui:message', { text: '你被击杀了', time: currentTime });
     this.events.emit('player:death', { team: this.conquestMode.playerTeam, time: currentTime });
     if (this.deathOverlay) this.deathOverlay.style.display = 'flex';
-    // 阶段 10 P1：观战模式——阵亡等待重生期间可自由飞行 / 跟随 AI（单机；联网由服务端权威相机接管）
+    // 阶段 10+ 新特性：击杀回放（死亡后自动展示击杀者视角 3 秒）
     if (!this.networkGameClient && !this.isTraining) {
-      this.spectatorMode.activate();
-      this.events.emit('ui:message', {
-        text: '观战模式：WASD 自由飞行，按 E 切换跟随目标',
-        time: currentTime,
-      });
+      if (this.lastKillerPos) {
+        this.spectatorMode.startKillcam({
+          killerPosition: this.lastKillerPos,
+          killerRotation: this.lastKillerYaw,
+        });
+        this.events.emit('ui:message', {
+          text: '击杀回放中...',
+          time: currentTime,
+        });
+        this.lastKillerPos = null;
+      } else {
+        this.spectatorMode.activate();
+        this.events.emit('ui:message', {
+          text: '观战模式：WASD 自由飞行，按 E 切换跟随目标',
+          time: currentTime,
+        });
+      }
     }
   }
 
@@ -2986,6 +3013,10 @@ export class GameScene {
     this.pendingMouseMovement.x = 0;
     this.pendingMouseMovement.y = 0;
 
+    // 阶段 10+ 新特性：压制效果衰减（每秒衰减 suppressionDecay，HUD 实时更新）
+    this.suppressionTimer = Math.max(0, this.suppressionTimer - this.suppressionDecay * dt);
+    this.hud.setSuppression(this.suppressionTimer);
+
     // 新手训练场（阶段 10 P1）：位置类步骤检测（移动标记点/机动障碍区）
     if (this.trainingMode) {
       this.updateTrainingProximity();
@@ -3020,6 +3051,8 @@ export class GameScene {
 
     // 武器
     this.weaponSystem.update(time);
+    // 阶段 10+ 新特性：手枪换弹完成后恢复主武器
+    this.weaponSystem.restorePrimary();
     const weapon = this.weaponSystem.getCurrentWeapon();
     const isMoving = this.inputManager.state.forward || this.inputManager.state.backward ||
       this.inputManager.state.left || this.inputManager.state.right;

@@ -1,4 +1,5 @@
 import { getTeamColors, hexToRgba, TEAM_COLOR_SCHEMES, type TeamColorScheme, type ColorBlindMode } from './teamColors';
+import * as THREE from 'three';
 
 export interface HUDData {
   health: number;
@@ -82,6 +83,8 @@ export class HUD {
     vehicleHealthContainer: HTMLElement | null;
     vehicleHealthBar: HTMLElement | null;
     vehicleHealthName: HTMLElement | null;
+    suppressionOverlay: HTMLElement | null;
+    suppressionBlur: HTMLElement | null;
   } = {
     healthBar: null,
     healthText: null,
@@ -112,6 +115,8 @@ export class HUD {
     vehicleHealthContainer: null,
     vehicleHealthBar: null,
     vehicleHealthName: null,
+    suppressionOverlay: null,
+    suppressionBlur: null,
   };
 
   killMessages: { text: string; time: number }[] = [];
@@ -259,6 +264,11 @@ export class HUD {
       </div>
 
       <div id="damage-vignette" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; background: radial-gradient(circle, transparent 50%, rgba(255,0,0,0.6) 100%); transition: opacity 0.3s;"></div>
+
+      <div id="suppression-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.3s; pointer-events: none;">
+        <div id="suppression-vignette" style="width: 100%; height: 100%; background: radial-gradient(ellipse at center, transparent 30%, rgba(20,20,20,0.65) 85%);"></div>
+        <div id="suppression-blur" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); transition: backdrop-filter 0.3s, -webkit-backdrop-filter 0.3s;"></div>
+      </div>
     `;
 
     document.body.appendChild(container);
@@ -273,6 +283,8 @@ export class HUD {
     this.elements.scoreText = container.querySelector('#score-text');
     this.elements.minimap = container.querySelector('#minimap-canvas') as HTMLCanvasElement;
     this.elements.damageVignette = container.querySelector('#damage-vignette');
+    this.elements.suppressionOverlay = container.querySelector('#suppression-overlay') as HTMLElement;
+    this.elements.suppressionBlur = container.querySelector('#suppression-blur') as HTMLElement;
     this.elements.staminaBar = container.querySelector('#stamina-bar');
     this.elements.equipmentText = container.querySelector('#equipment-text');
     this.elements.interactionPrompt = container.querySelector('#interaction-prompt');
@@ -731,6 +743,25 @@ export class HUD {
         }
       }, 300);
     }
+  }
+
+  /** 压制效果：intensity 0-1，0=无，1=最大暗角+模糊 */
+  private suppressionIntensity = 0;
+
+  setSuppression(intensity: number): void {
+    const clamped = THREE.MathUtils.clamp(intensity, 0, 1);
+    if (Math.abs(clamped - this.suppressionIntensity) < 0.01) return;
+    this.suppressionIntensity = clamped;
+    if (this.elements.suppressionOverlay) {
+      this.elements.suppressionOverlay.style.opacity = String(clamped);
+    }
+    if (this.elements.suppressionBlur) {
+      const blurPx = Math.round(clamped * 4);
+      this.elements.suppressionBlur.style.backdropFilter = `blur(${blurPx}px)`;
+      (this.elements.suppressionBlur.style as any).webkitBackdropFilter = `blur(${blurPx}px)`;
+    }
+    // 压制时准星扩散加大
+    this.crosshairSpread = Math.max(this.crosshairSpread, clamped * 20);
   }
 
   dispose(): void {

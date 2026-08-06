@@ -83,6 +83,11 @@ export class WeaponView {
         magazine = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.08, 0.05), bodyMaterial);
         stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, 0.3), woodMaterial);
         break;
+      case WeaponType.PISTOL:
+        body = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.15), bodyMaterial);
+        barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.01, 0.12, 6), bodyMaterial);
+        magazine = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.06, 0.03), bodyMaterial);
+        break;
     }
 
     barrel.rotation.x = Math.PI / 2;

@@ -5,6 +5,7 @@ export enum WeaponType {
   SMG = 'smg',
   LMG = 'lmg',
   BOLT_RIFLE = 'bolt_rifle',
+  PISTOL = 'pistol',
 }
 
 export enum FireMode {
@@ -131,6 +132,26 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     crouchSpreadMultiplier: 0.6,
     boltActionTime: 0.8,
   },
+  [WeaponType.PISTOL]: {
+    name: 'P08 鲁格',
+    type: WeaponType.PISTOL,
+    fireMode: FireMode.SINGLE,
+    damage: 22,
+    fireRate: 6,
+    magazineSize: 8,
+    reloadTime: 1.5,
+    accuracy: 0.88,
+    recoil: 0.05,
+    range: 40,
+    headshotMultiplier: 1.5,
+    bulletSpeed: 350,
+    minDamage: 14,
+    falloffStart: 10,
+    falloffEnd: 40,
+    firstShotRecoilMultiplier: 1,
+    movingSpreadMultiplier: 1.3,
+    crouchSpreadMultiplier: 0.8,
+  },
 };
 
 export class Weapon {
@@ -247,6 +268,34 @@ export class WeaponSystem {
 
   getCurrentWeapon(): Weapon {
     return this.weapons.get(this.currentWeaponType)!;
+  }
+
+  /** 当前主武器弹尽时自动切副武器（手枪），换弹后恢复 */
+  private lastPrimaryType: WeaponType | null = null;
+  private hadPrimaryAmmo = true;
+
+  autoSwitchSecondary(): boolean {
+    const w = this.getCurrentWeapon();
+    if (w.config.type === WeaponType.PISTOL) return false;
+    if (w.currentAmmo > 0) { this.hadPrimaryAmmo = true; return false; }
+    if (w.reserveAmmo > 0) return false; // 有后备弹药，等换弹
+    // 主武器弹尽 → 切副武器
+    if (!this.hadPrimaryAmmo) return false; // 已切过
+    this.hadPrimaryAmmo = false;
+    this.lastPrimaryType = this.currentWeaponType;
+    this.switchWeapon(WeaponType.PISTOL);
+    return true;
+  }
+
+  /** 副武器切回主武器（换弹完成后） */
+  restorePrimary(): boolean {
+    if (this.currentWeaponType !== WeaponType.PISTOL || !this.lastPrimaryType) return false;
+    const primary = this.weapons.get(this.lastPrimaryType);
+    if (!primary || primary.currentAmmo <= 0) return false;
+    this.switchWeapon(this.lastPrimaryType);
+    this.lastPrimaryType = null;
+    this.hadPrimaryAmmo = true;
+    return true;
   }
 
   switchWeapon(type: WeaponType): void {

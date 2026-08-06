@@ -8,6 +8,7 @@ export interface InputState {
   jump: boolean;
   sprint: boolean;
   crouch: boolean;
+  prone: boolean;
   fire: boolean;
   aim: boolean;
   reload: boolean;
@@ -41,7 +42,7 @@ export class InputManager {
 
   public state: InputState = {
     forward: false, backward: false, left: false, right: false,
-    jump: false, sprint: false, crouch: false,
+    jump: false, sprint: false, crouch: false, prone: false,
     fire: false, aim: false, reload: false,
   };
 
@@ -172,6 +173,7 @@ export class InputManager {
     this.state.jump = this.keys.has(b.jump);
     this.state.sprint = this.keys.has(b.sprint) || this.keys.has('ShiftRight');
     this.state.crouch = this.keys.has(b.crouch) || this.keys.has('ControlRight');
+    this.state.prone = this.keys.has(b.prone);
     this.state.reload = this.keys.has(b.reload);
   }
 

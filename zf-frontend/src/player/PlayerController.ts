@@ -10,6 +10,8 @@ const PLAYER_RADIUS = PLAYER_CONFIG.radius;
 const WALK_SPEED = PLAYER_CONFIG.walkSpeed;
 const SPRINT_SPEED = PLAYER_CONFIG.sprintSpeed;
 const CROUCH_SPEED = PLAYER_CONFIG.crouchSpeed;
+const PRONE_HEIGHT = 0.5; // 匍匐高度
+const PRONE_SPEED = 1.2; // 匍匐移动速度
 const JUMP_FORCE = PLAYER_CONFIG.jumpForce;
 const AIR_CONTROL = PLAYER_CONFIG.airControl;
 const MOUSE_SENSITIVITY = PLAYER_CONFIG.mouseSensitivity;
@@ -64,6 +66,10 @@ export class PlayerController {
   private isCrouching = false;
   private currentHeight = PLAYER_HEIGHT;
 
+  // 匍匐（阶段 10+：新特性——趴下，进一步缩小受弹面积）
+  private isProne = false;
+  private wasPronePressed = false;
+
   // FOV
   private currentFov = BASE_FOV;
   private targetFov = BASE_FOV;
@@ -100,6 +106,7 @@ export class PlayerController {
     this.updateMovement(input, dt);
     this.updateStamina(input, dt);
     this.updateCrouch(input, dt);
+    this.updateProne(input, dt);
     this.updateBob(input, dt);
     this.updateFov(dt);
     this.updateCameraRecoil(dt);
@@ -141,7 +148,7 @@ export class PlayerController {
     const canSprint = input.sprint && this.stamina > STAMINA_MIN_TO_SPRINT && !input.crouch;
     this.isSprinting = canSprint && (input.forward || input.backward);
 
-    const speed = this.isSprinting ? SPRINT_SPEED : input.crouch ? CROUCH_SPEED : WALK_SPEED;
+    const speed = this.isSprinting ? SPRINT_SPEED : this.isProne ? PRONE_SPEED : input.crouch ? CROUCH_SPEED : WALK_SPEED;
     const controlFactor = this.isGrounded ? 1.0 : AIR_CONTROL;
 
     const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw);
@@ -208,13 +215,36 @@ export class PlayerController {
       );
     }
 
-    const targetHeight = this.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
+    const targetHeight = this.isProne ? PRONE_HEIGHT : this.isCrouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
     this.currentHeight += (targetHeight - this.currentHeight) * Math.min(1, 10 * dt);
+  }
+
+  /** 匍匐：Z 键切换，趴下时不能冲刺/跳跃，起立前检查头顶空间 */
+  private updateProne(input: InputState, _dt: number): void {
+    if (input.prone && !this.wasPronePressed) {
+      this.wasPronePressed = true;
+      if (this.isProne) {
+        // 起立：检查头顶空间
+        const standingHalfHeight = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
+        const centerOffset = (PLAYER_HEIGHT - PRONE_HEIGHT) / 2;
+        if (this.physicsWorld.canResizeCapsule(this.bodyId, PLAYER_RADIUS, standingHalfHeight, centerOffset)) {
+          this.isProne = false;
+          this.isCrouching = false;
+          this.physicsWorld.resizeCapsule(this.bodyId, PLAYER_RADIUS, PLAYER_HEIGHT / 2 - PLAYER_RADIUS);
+        }
+      } else {
+        this.isProne = true;
+        this.isCrouching = false;
+        this.isSprinting = false;
+        this.physicsWorld.resizeCapsule(this.bodyId, PLAYER_RADIUS, PRONE_HEIGHT / 2 - PLAYER_RADIUS);
+      }
+    }
+    if (!input.prone) this.wasPronePressed = false;
   }
 
   private updateBob(input: InputState, dt: number): void {
     const isMoving = input.forward || input.backward || input.left || input.right;
-    const speedFactor = this.isSprinting ? 1.5 : this.isCrouching ? 0.5 : 1.0;
+    const speedFactor = this.isSprinting ? 1.5 : this.isProne ? 0.3 : this.isCrouching ? 0.5 : 1.0;
 
     if (isMoving && this.isGrounded) {
       this.bobPhase += dt * BOB_FREQUENCY * speedFactor;
@@ -313,6 +343,8 @@ export class PlayerController {
     this.bobIntensity = 0;
     this.cameraRecoilPitch = 0;
     this.cameraRecoilYaw = 0;
+    this.isProne = false;
+    this.wasPronePressed = false;
   }
 
   // 坠落伤害回调
@@ -347,5 +379,9 @@ export class PlayerController {
 
   isCrouchActive(): boolean {
     return this.isCrouching;
+  }
+
+  isProneActive(): boolean {
+    return this.isProne;
   }
 }
