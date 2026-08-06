@@ -183,7 +183,7 @@ export class AudioSystem {
     this.sounds.set(SoundType.UI_HOVER, this.createTone(0.03, 1200, 0.2));
   }
 
-  private createNoiseBurst(duration: number, filterFreq: number, volume: number): AudioBuffer {
+  private createNoiseBurst(duration: number, _filterFreq: number, volume: number): AudioBuffer {
     const ctx = this.audioContext!;
     const sampleRate = ctx.sampleRate;
     const length = Math.floor(sampleRate * duration);

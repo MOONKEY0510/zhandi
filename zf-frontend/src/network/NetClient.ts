@@ -113,7 +113,6 @@ export class NetClient {
   private seq = 0;
   private connected = false;
   private roomId: string | null = null;
-  private phase: RoomState['phase'] | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private manualClose = false;
@@ -410,7 +409,6 @@ export class NetClient {
         this.onJoinAck?.(msg);
         break;
       case 'room_state':
-        this.phase = msg.phase;
         this.onRoomState?.(msg);
         break;
       case 'game_state':

@@ -177,7 +177,7 @@ export class PlayerController {
     });
   }
 
-  private updateStamina(input: InputState, dt: number): void {
+  private updateStamina(_input: InputState, dt: number): void {
     if (this.isSprinting) {
       this.stamina = Math.max(0, this.stamina - STAMINA_DRAIN_RATE * dt);
     } else {

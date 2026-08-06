@@ -117,11 +117,25 @@ interface VehicleProjectile {
   vehicleMultiplier: number;
 }
 
+/**
+ * 游戏主场景——所有子系统通过固定步长主循环串联（~3000 行，19 个区段）。
+ * 待后续按职责拆分为独立控制器（射击/载具/训练/观战/联网/爆炸/弹道等）。
+ *
+ * 区段导航：
+ *   L130  初始化与事件绑定
+ *   L490  initializeGameWorld（物理/地图/天气/破坏/征服/出生点/AI/载具）
+ *   L836  setupInputCallbacks（武器/装备/载具/观战/计分板）
+ *   L1080 爆炸特效 / 烟雾 / 伤害数字
+ *   L1220 战术装备 / 载具 / 联网载具 / 载具武器弹道
+ *   L1700 射击 / 装备伤害 / 弹道轨迹 / 弹孔 / 碰撞火花 / 血液
+ *   L2100 AI 射击回调 / AI 攻击
+ *   L2560 牌更新 / 枪声分层 / 主循环
+ *   L2790 动态分辨率 / 新手训练场 / 性能监控
+ */
 export class GameScene {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
-  private container: HTMLElement;
   private readonly config = resolveGameConfig();
   private readonly stateMachine = new GameStateMachine();
   private readonly events = new EventBus<GameEvents>();
@@ -325,7 +339,6 @@ export class GameScene {
   private deathOverlay: HTMLElement | null = null;
 
   constructor(container: HTMLElement) {
-    this.container = container;
 
     const configErrors = validateGameConfig(this.config);
     if (configErrors.length > 0) {
@@ -626,7 +639,7 @@ export class GameScene {
     this.conquestMode.competitive = !training; // 训练场无对战，不判胜负/不流失兵力
     AIBot.playerTeam = TeamId.ALLIES; // 设置 AI 的玩家阵营
     // 阶段 10：据点易主 → 字幕播报（关键音频信息的视觉替代）
-    this.conquestMode.onControlPointCaptured = (pointId, owner, name) => {
+    this.conquestMode.onControlPointCaptured = (_pointId, owner, name) => {
       const teamName = owner === TeamId.AXIS ? '德军' : '苏军';
       this.subtitleOverlay?.show(`「${name}」被${teamName}占领`, 3500);
       // 阶段 10 P1：回放录制据点事件
@@ -1964,7 +1977,7 @@ export class GameScene {
   }
 
   private findProjectileEntityHit(
-    p: VehicleProjectile,
+    _p: VehicleProjectile,
     start: THREE.Vector3,
     dir: THREE.Vector3,
     step: number
@@ -2451,7 +2464,6 @@ export class GameScene {
   }
 
   // ====== 碰撞火花 ======
-  private sparkGeometry = new THREE.BufferGeometry();
   private sparkMaterial = new THREE.PointsMaterial({
     color: 0xffdd44, size: 0.04, transparent: true, opacity: 1,
     blending: THREE.AdditiveBlending, depthWrite: false,

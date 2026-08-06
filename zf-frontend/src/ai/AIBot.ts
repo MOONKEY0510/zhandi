@@ -147,10 +147,8 @@ export class AIBot {
   private rightLeg!: THREE.Mesh;
   private weaponMesh!: THREE.Group;
   private muzzleFlashMesh!: THREE.Mesh;
-  private muzzleFlashTime = 0;
 
   // 寻路
-  private pathFindTimer = 0;
   private avoidDirection = new THREE.Vector3();
   private stuckTimer = 0;
   private lastPosition = new THREE.Vector3();
@@ -828,7 +826,7 @@ export class AIBot {
     }
   }
 
-  private seekCover(deltaTime: number, currentTime: number, playerPosition: THREE.Vector3): void {
+  private seekCover(deltaTime: number, _currentTime: number, playerPosition: THREE.Vector3): void {
     this.isMoving = true;
     this.coverTimer -= deltaTime * 1000;
 
@@ -1157,7 +1155,7 @@ export class AISystem {
   }
 
   /** 周期性反载具扫描：为 Bot 指派/刷新载具目标 */
-  private scanVehiclesForBots(currentTime: number, playerPosition: THREE.Vector3): void {
+  private scanVehiclesForBots(_currentTime: number, playerPosition: THREE.Vector3): void {
     if (this.vehicles.length === 0) return;
     for (const bot of this.bots) {
       if (bot.state === AIState.DEAD) continue;
