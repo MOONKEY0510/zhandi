@@ -3,3 +3,4 @@ export type { MapConfig } from './BerlinRuins';
 export { MapManager } from './MapManager';
 export { buildMapFromDefinition } from './MapDefinition';
 export type { BuiltMapData, MapDefinition, MapObjectDefinition } from './MapDefinition';
+export { TrainingRange, TRAINING_LAYOUT, TRAINING_TARGET_FLAG } from './TrainingRange';

@@ -6,18 +6,21 @@ export class MainMenu {
   elements: {
     title: HTMLElement | null;
     playButton: HTMLElement | null;
+    trainingButton: HTMLElement | null;
     settingsButton: HTMLElement | null;
     quitButton: HTMLElement | null;
     version: HTMLElement | null;
   } = {
     title: null,
     playButton: null,
+    trainingButton: null,
     settingsButton: null,
     quitButton: null,
     version: null,
   };
 
   onPlay: (() => void) | null = null;
+  onTraining: (() => void) | null = null;
   onSettings: (() => void) | null = null;
   onQuit: (() => void) | null = null;
 
@@ -57,6 +60,11 @@ export class MainMenu {
           font-size: 20px;
         ">开始游戏</button>
 
+        <button id="training-button" class="ui-btn ui-btn-ghost" style="
+          padding: 15px 40px;
+          font-size: 18px;
+        ">训练场</button>
+
         <button id="settings-button" class="ui-btn ui-btn-ghost" style="
           padding: 15px 40px;
           font-size: 18px;
@@ -75,6 +83,7 @@ export class MainMenu {
 
     this.elements.title = container.querySelector('#title');
     this.elements.playButton = container.querySelector('#play-button');
+    this.elements.trainingButton = container.querySelector('#training-button');
     this.elements.settingsButton = container.querySelector('#settings-button');
     this.elements.quitButton = container.querySelector('#quit-button');
     this.elements.version = container.querySelector('#version');
@@ -89,6 +98,12 @@ export class MainMenu {
     if (this.elements.playButton) {
       this.elements.playButton.addEventListener('click', () => {
         this.onPlay?.();
+      });
+    }
+
+    if (this.elements.trainingButton) {
+      this.elements.trainingButton.addEventListener('click', () => {
+        this.onTraining?.();
       });
     }
 

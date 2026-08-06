@@ -53,6 +53,9 @@ import { ConquestPresenter } from './ConquestPresenter';
 import { AchievementSystem, AchievementType } from './AchievementSystem';
 import { ConquestMode, TeamId, objectiveOwnerToTeam } from './ConquestMode';
 import { RoundFlow, RoundPhase } from './RoundFlow';
+import { TrainingMode, type TrainingStepId } from '../training/TrainingMode';
+import { TrainingOverlay } from '../ui/TrainingOverlay';
+import { TRAINING_LAYOUT } from '../maps/TrainingRange';
 
 const WEAPON_ORDER: WeaponType[] = [
   WeaponType.ASSAULT_RIFLE,
@@ -189,6 +192,12 @@ export class GameScene {
 
   // 地图
   private mapManager!: MapManager;
+
+  // 新手训练场（阶段 10 P1）
+  private isTraining = false;
+  private trainingMode: TrainingMode | null = null;
+  private trainingOverlay!: TrainingOverlay;
+  private trainingTargets: THREE.Object3D[] = [];
 
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
@@ -415,11 +424,22 @@ export class GameScene {
       this.mainMenu.hide();
       this.startGame();
     };
+    // 阶段 10 P1：新手训练场入口（训练世界 → 完成后返回主菜单）
+    this.mainMenu.onTraining = () => {
+      this.mainMenu.hide();
+      this.startTraining();
+    };
     this.mainMenu.onSettings = () => {
       this.settingsMenu.show();
     };
     this.mainMenu.onQuit = () => {
       window.close();
+    };
+
+    // 训练覆盖层：完成后返回主菜单（干净重开，避免世界对象残留）
+    this.trainingOverlay = new TrainingOverlay();
+    this.trainingOverlay.onBackToMenu = () => {
+      this.exitTraining();
     };
 
     this.settingsMenu.onApply = (settings: GameSettings) => {
@@ -487,7 +507,31 @@ export class GameScene {
     }
   }
 
-  private async initializeGameWorld(): Promise<void> {
+  /** 阶段 10 P1：新手训练场——独立世界初始化，完成后返回主菜单 */
+  private async startTraining(): Promise<void> {
+    if (!this.stateMachine.is(GameState.MENU)) return;
+    this.stateMachine.transition(GameState.LOADING);
+
+    try {
+      await this.initializeGameWorld(true);
+      this.trainingMode = new TrainingMode();
+      this.trainingTargets = this.mapManager.getTrainingTargets();
+      this.trainingOverlay.show();
+      this.trainingOverlay.update(this.trainingMode);
+      this.inputManager.requestPointerLock();
+      this.events.emit('ui:message', {
+        text: '欢迎来到训练场，跟随提示完成全部训练！',
+        time: this.simulationTimeMs,
+      });
+    } catch (error) {
+      console.error('Failed to initialize training range', error);
+      this.stateMachine.transition(GameState.MENU);
+      this.mainMenu.show();
+    }
+  }
+
+  private async initializeGameWorld(training = false): Promise<void> {
+    this.isTraining = training;
     // 长任务/GC 观测（阶段 9）：进入游戏世界即开始监听
     this.longTaskMonitor.start();
 
@@ -495,18 +539,18 @@ export class GameScene {
     this.physicsWorld = await PhysicsWorld.init();
     this.physicsWorld.createGround(120);
 
-    // 地图 - 柏林废墟
+    // 地图：对战用柏林废墟，训练用训练场
     this.mapManager = new MapManager(this.scene);
-    this.mapManager.loadMap('berlin_ruins');
+    this.mapManager.loadMap(training ? 'training_range' : 'berlin_ruins');
     this.environmentObjects = this.mapManager.getCollisionObjects();
 
-    // 局部破坏（阶段 7 P0）：预切片对象加入碰撞与 AI 视线，摧毁后移除
+    // 局部破坏（阶段 7 P0）：预切片对象加入碰撞与 AI 视线，摧毁后移除（训练场保持靶场干净，不布破坏物）
     this.destructibleSystem = new DestructibleSystem(this.scene);
     this.destructibleSystem.onDestroy = (obj) => {
       const idx = this.environmentObjects.indexOf(obj.mesh);
       if (idx >= 0) this.environmentObjects.splice(idx, 1);
     };
-    this.spawnDestructibles();
+    if (!training) this.spawnDestructibles();
 
     // 玩家
     this.player = new PlayerController(this.physicsWorld, this.camera);
@@ -545,22 +589,39 @@ export class GameScene {
     // 征服模式（必须在 setupSpawnPoints 之前初始化）
     this.conquestMode = new ConquestMode();
     this.conquestMode.setPlayerTeam(TeamId.ALLIES); // 玩家默认苏军（蓝方）
+    this.conquestMode.competitive = !training; // 训练场无对战，不判胜负/不流失兵力
     AIBot.playerTeam = TeamId.ALLIES; // 设置 AI 的玩家阵营
     // 阶段 10：据点易主 → 字幕播报（关键音频信息的视觉替代）
     this.conquestMode.onControlPointCaptured = (pointId, owner, name) => {
       const teamName = owner === TeamId.AXIS ? '德军' : '苏军';
       this.subtitleOverlay?.show(`「${name}」被${teamName}占领`, 3500);
+      // 阶段 10 P1：训练占点步骤完成
+      if (training && owner === this.conquestMode.playerTeam) {
+        this.handleTrainingProgress('capture');
+      }
     };
+
+    // 阶段 10 P1：训练据点——单点布局（位置与训练场地图 TRAINING_LAYOUT 一致）
+    if (training) {
+      this.conquestMode.controlPoints = [
+        {
+          id: 'T', name: '训练据点', position: new THREE.Vector3(TRAINING_LAYOUT.capturePoint.x, 0, TRAINING_LAYOUT.capturePoint.z),
+          radius: this.conquestMode.config.captureRadius, owner: TeamId.NEUTRAL,
+          captureProgress: 0, capturingTeam: null, captureSpeed: this.conquestMode.config.captureSpeed,
+          contested: false, axisCount: 0, alliesCount: 0,
+        },
+      ];
+    }
 
     this.setupSpawnPoints();
 
-    // AI - 分阵营生成
+    // AI - 分阵营生成（训练场无 AI，保持安静靶场）
     const axisSpawn = this.conquestMode.teams.get(TeamId.AXIS)!.spawnPoint;
     const alliesSpawn = this.conquestMode.teams.get(TeamId.ALLIES)!.spawnPoint;
     this.aiSystem = AISystem.createTeamBots(
       this.scene,
-      this.config.ai.axisCount,
-      this.config.ai.alliesCount,
+      training ? 0 : this.config.ai.axisCount,
+      training ? 0 : this.config.ai.alliesCount,
       axisSpawn,
       alliesSpawn,
       this.conquestMode.playerTeam,
@@ -634,6 +695,16 @@ export class GameScene {
 
     this.simulationTimeMs = performance.now();
     this.simulationClock.reset(this.simulationTimeMs);
+
+    // 训练场：跳过部署菜单与服务器连接，直接进入战斗状态（由 startTraining 收尾）
+    if (this.isTraining) {
+      // 推进回合流程直接到战斗阶段（跳过 0s 部署 + 5s 倒计时）
+      this.roundFlow.update(0);
+      this.roundFlow.update(5);
+      this.stateMachine.transition(GameState.PLAYING);
+      return;
+    }
+
     this.stateMachine.transition(GameState.PAUSED);
     this.deploymentMenu.show();
 
@@ -662,6 +733,16 @@ export class GameScene {
   }
 
   private spawnVehicles(): void {
+    // 训练场：单辆吉普停在载具标记点（载具教程步骤用），同阵营可直接进入
+    if (this.isTraining) {
+      this.vehicleSystem.spawnVehicle(
+        VehicleType.JEEP,
+        new THREE.Vector3(TRAINING_LAYOUT.vehiclePoint.x, 1, TRAINING_LAYOUT.vehiclePoint.z),
+        this.conquestMode.playerTeam,
+      );
+      return;
+    }
+
     const spawnPositions = [
       new THREE.Vector3(15, 1, 15),
       new THREE.Vector3(-15, 1, -15),
@@ -687,8 +768,10 @@ export class GameScene {
     this.aiSystem.configureVehicles([]);
   }
 
-  /** 在双方营地部署载具补给站（阶段 7 P1）：同阵营载具进入半径快速维修 + 补弹 */
+  /** 在双方营地部署载具补给站（阶段 7 P1）：同阵营载具进入半径快速维修 + 补弹（训练场不部署） */
   private spawnSupplyStations(): void {
+    if (this.isTraining) return;
+
     const axisSpawn = this.conquestMode.teams.get(TeamId.AXIS)?.spawnPoint;
     const alliesSpawn = this.conquestMode.teams.get(TeamId.ALLIES)?.spawnPoint;
     if (axisSpawn) this.vehicleSystem.addSupplyStation(axisSpawn.clone().add(new THREE.Vector3(4, 0, 4)), 12, TeamId.AXIS);
@@ -735,6 +818,10 @@ export class GameScene {
         this.weaponSystem.switchWeapon(allowedWeapons[slot]);
         this.weaponView.equipWeapon(this.weaponSystem.getCurrentWeapon());
         this.audioSystem.play(SoundType.UI_CLICK);
+        // 阶段 10 P1：训练兵种装备切换步骤（切到不同武器才算完成）
+        if (this.trainingMode?.registerWeaponSwitch(allowedWeapons[slot])) {
+          this.handleTrainingProgress('weapon');
+        }
       }
     });
 
@@ -742,6 +829,8 @@ export class GameScene {
       const time = this.simulationTimeMs;
       if (this.weaponSystem.reload(time)) {
         this.audioSystem.play(SoundType.RELOAD);
+        // 阶段 10 P1：训练换弹步骤
+        this.handleTrainingProgress('reload');
       }
     });
 
@@ -1138,6 +1227,55 @@ export class GameScene {
     this.mainMenu.show();
   }
 
+  // ====== 新手训练场（阶段 10 P1） ======
+
+  /** 训练步骤完成统一入口：推进步骤 → 刷新覆盖层 → 全部完成则结束训练 */
+  private handleTrainingProgress(stepId: TrainingStepId): void {
+    if (!this.trainingMode || this.trainingMode.isCompleted) return;
+    this.trainingMode.completeStep(stepId);
+    this.trainingOverlay.update(this.trainingMode);
+    if (this.trainingMode.isCompleted) {
+      this.finishTraining();
+    }
+  }
+
+  /** 每帧位置类步骤检测：移动标记点 / 机动障碍区 */
+  private updateTrainingProximity(): void {
+    if (!this.trainingMode || !this.player) return;
+    const pos = this.player.getPosition();
+    if (!pos) return;
+    const current = this.trainingMode.current;
+    if (!current) return;
+
+    if (current.id === 'move') {
+      const dx = pos.x - TRAINING_LAYOUT.moveMarker.x;
+      const dz = pos.z - TRAINING_LAYOUT.moveMarker.z;
+      if (dx * dx + dz * dz < 2.5 * 2.5) this.handleTrainingProgress('move');
+    } else if (current.id === 'mobility') {
+      const dx = pos.x - TRAINING_LAYOUT.mobilityMarker.x;
+      const dz = pos.z - TRAINING_LAYOUT.mobilityMarker.z;
+      if (dx * dx + dz * dz < 2.5 * 2.5) this.handleTrainingProgress('mobility');
+    }
+  }
+
+  /** 训练完成：暂停游戏、退出指针锁定、显示完成弹窗 */
+  private finishTraining(): void {
+    if (this.stateMachine.is(GameState.PLAYING)) {
+      this.stateMachine.transition(GameState.PAUSED);
+    }
+    document.exitPointerLock();
+    this.trainingOverlay.showComplete();
+    this.events.emit('ui:message', {
+      text: '训练完成，干得漂亮！',
+      time: this.simulationTimeMs,
+    });
+  }
+
+  /** 训练返回主菜单：干净重开页面，避免世界对象残留（菜单/设置/档案均已持久化） */
+  private exitTraining(): void {
+    window.location.reload();
+  }
+
   /**
    * 联网死亡/重生生命周期（服务端权威）：
    * 快照校正后的本人 alive 翻转 → 死亡遮罩/重生传送；死亡中刷新倒计时。
@@ -1474,6 +1612,8 @@ export class GameScene {
     if (equipment) {
       this.audioSystem.play(SoundType.UI_CLICK);
       this.hud.addKillMessage(`投掷 ${equipment.config.name}`, this.simulationTimeMs);
+      // 阶段 10 P1：训练投掷步骤
+      this.handleTrainingProgress('grenade');
     }
   }
 
@@ -1545,6 +1685,8 @@ export class GameScene {
             this.inVehicle = true;
             this.currentVehicle = { vehicle, isDriver: seat === 'driver' };
             this.hud.addKillMessage(`进入 ${vehicle.config.name}（${seat === 'driver' ? '驾驶' : '乘坐'}）`, this.simulationTimeMs);
+            // 阶段 10 P1：训练载具步骤
+            this.handleTrainingProgress('vehicle');
             break;
           }
         }
@@ -1922,6 +2064,7 @@ export class GameScene {
       ...this.aiSystem.getAllTargetableMeshes(),
       ...this.environmentObjects,
       ...this.vehicleSystem.vehicles.filter((v) => !v.destroyed).map((v) => v.mesh),
+      ...this.trainingTargets,
     ];
     const hitInfo = this.raycast.cast(direction, config.range, targets);
 
@@ -1999,6 +2142,20 @@ export class GameScene {
             this.audioSystem.play(SoundType.HIT);
           }
           return;
+        }
+        obj = obj.parent;
+      }
+    }
+
+    // 训练靶子命中（阶段 10 P1）：靶板带 trainingTarget 标记，命中计入射击训练
+    if (this.trainingMode && hitInfo.target) {
+      let obj: THREE.Object3D | null = hitInfo.target;
+      while (obj) {
+        if ((obj.userData as { trainingTarget?: boolean } | undefined)?.trainingTarget) {
+          const done = this.trainingMode.registerTargetHit();
+          if (done) this.handleTrainingProgress('shoot');
+          else this.trainingOverlay.update(this.trainingMode);
+          break;
         }
         obj = obj.parent;
       }
@@ -2701,6 +2858,11 @@ export class GameScene {
     this.pendingMouseMovement.x = 0;
     this.pendingMouseMovement.y = 0;
 
+    // 新手训练场（阶段 10 P1）：位置类步骤检测（移动标记点/机动障碍区）
+    if (this.trainingMode) {
+      this.updateTrainingProximity();
+    }
+
     // 联网权威回写：本地渲染位置向服务端预测轨迹平滑收敛
     // （水平 x/z；垂直 y 与跳跃/碰撞保留本地物理，服务端移动模型暂无 y 轴与碰撞）
     if (this.player && this.clientPrediction && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle && (!this.networkGameClient || this.networkAlive)) {
@@ -3011,6 +3173,7 @@ export class GameScene {
     this.subtitleOverlay?.dispose();
     this.firstRunWizard?.dispose();
     this.consentDialog?.dispose();
+    this.trainingOverlay?.dispose();
     this.crashReporter.deactivate();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);

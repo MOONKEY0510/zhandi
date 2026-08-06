@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BerlinRuins } from './BerlinRuins';
 import { buildMapFromDefinition, type BuiltMapData, type MapDefinition } from './MapDefinition';
+import { TrainingRange } from './TrainingRange';
 
 export interface SpawnPoint {
   position: THREE.Vector3;
@@ -9,7 +10,7 @@ export interface SpawnPoint {
 
 export class MapManager {
   scene: THREE.Scene;
-  currentMap: BerlinRuins | null = null;
+  currentMap: BerlinRuins | TrainingRange | null = null;
   spawnPoints: SpawnPoint[] = [];
   private builtDefinition: BuiltMapData | null = null;
 
@@ -25,6 +26,9 @@ export class MapManager {
     switch (mapName) {
       case 'berlin_ruins':
         this.currentMap = new BerlinRuins(this.scene);
+        break;
+      case 'training_range':
+        this.currentMap = new TrainingRange(this.scene);
         break;
       default:
         this.currentMap = new BerlinRuins(this.scene);
@@ -66,6 +70,12 @@ export class MapManager {
 
   getSoundZones() {
     return this.builtDefinition?.soundZones ?? [];
+  }
+
+  /** 训练场靶子网格（训练射击计数用）；非训练场返回空数组 */
+  getTrainingTargets(): THREE.Object3D[] {
+    if (this.currentMap instanceof TrainingRange) return this.currentMap.getTargetMeshes();
+    return [];
   }
 
   dispose(): void {

@@ -72,6 +72,9 @@ export class ConquestMode {
   gameTime = 0;
   onTicketEvent: ((event: TicketEvent) => void) | null = null;
   /** 阶段 10：据点易主回调（占领完成时触发；字幕播报的视觉替代数据源） */
+  /** 对战模式标志：false 时禁用兵力流失与胜负判定（新手训练场用，占点练习不触发结算） */
+  competitive = true;
+
   onControlPointCaptured: ((pointId: string, owner: TeamId, name: string) => void) | null = null;
 
   constructor(config: Partial<ConquestConfig> = {}) {
@@ -146,11 +149,11 @@ export class ConquestMode {
       this.updateControlPoint(point, dt, entities);
     }
 
-    // 兵力值流失：失去据点的队伍每秒流失
-    this.updateTicketDrain(dt);
+    // 兵力值流失：失去据点的队伍每秒流失（训练场无对战，跳过）
+    if (this.competitive) this.updateTicketDrain(dt);
 
-    // 检查胜负
-    this.checkWinCondition();
+    // 检查胜负（训练场无对战，跳过）
+    if (this.competitive) this.checkWinCondition();
   }
 
   private updateControlPoint(point: ControlPoint, dt: number, entities: { position: THREE.Vector3; team: TeamId }[]): void {
