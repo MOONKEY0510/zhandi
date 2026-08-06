@@ -23,7 +23,9 @@ import { SettingsMenu, type GameSettings } from '../ui/SettingsMenu';
 import { Scoreboard } from '../ui/Scoreboard';
 import { DeploymentMenu } from '../ui/DeploymentMenu';
 import { FirstRunWizard } from '../ui/FirstRunWizard';
+import { ConsentDialog } from '../ui/ConsentDialog';
 import { savePlayerProfile, isFirstRun } from '../config/PlayerProfile';
+import { CrashReporter, getConsent, setConsent } from '../telemetry/Telemetry';
 import { HealthSystem } from '../player/HealthSystem';
 import { RespawnSystem } from '../player/RespawnSystem';
 import type { SoldierClassDefinition } from '../player/SoldierClass';
@@ -137,6 +139,10 @@ export class GameScene {
   private subtitleOverlay!: SubtitleOverlay;
   /** 阶段 10：首次设置向导（新用户流程闭环入口） */
   private firstRunWizard!: FirstRunWizard;
+  /** 阶段 10：崩溃/错误匿名统计同意对话框 */
+  private consentDialog!: ConsentDialog;
+  /** 阶段 10：匿名崩溃统计上报器（同意后激活） */
+  private readonly crashReporter = new CrashReporter();
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
   /** 联网模式本人存活状态（服务端快照驱动；死亡表现/重生传送/输入门控用） */
@@ -402,6 +408,7 @@ export class GameScene {
     this.deploymentMenu = new DeploymentMenu();
     this.subtitleOverlay = new SubtitleOverlay();
     this.firstRunWizard = new FirstRunWizard();
+    this.consentDialog = new ConsentDialog();
     this.deploymentMenu.onDeploy = (definition) => this.deployAs(definition);
 
     this.mainMenu.onPlay = () => {
@@ -442,12 +449,29 @@ export class GameScene {
     };
 
     this.stateMachine.transition(GameState.MENU);
+    // 阶段 10：崩溃/错误匿名统计同意 → 首次设置 → 主菜单（完整流程闭环）
+    this.consentDialog.onResult = (granted) => {
+      setConsent(granted ? 'granted' : 'denied');
+      this.crashReporter.syncWithConsent();
+      this.consentDialog.hide();
+      this.continueBootstrapFlow();
+    };
+    this.crashReporter.syncWithConsent();
+    if (getConsent() === null) {
+      this.consentDialog.show();
+    } else {
+      this.continueBootstrapFlow();
+    }
+    this.animate(performance.now());
+  }
+
+  /** 同意流程完成后：首次运行显示设置向导，否则直接主菜单 */
+  private continueBootstrapFlow(): void {
     if (isFirstRun()) {
       this.firstRunWizard.show();
     } else {
       this.mainMenu.show();
     }
-    this.animate(performance.now());
   }
 
   private async startGame(): Promise<void> {
@@ -2986,6 +3010,8 @@ export class GameScene {
     this.connectionOverlay = null;
     this.subtitleOverlay?.dispose();
     this.firstRunWizard?.dispose();
+    this.consentDialog?.dispose();
+    this.crashReporter.deactivate();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
