@@ -30,6 +30,7 @@ import { HealthSystem } from '../player/HealthSystem';
 import { RespawnSystem } from '../player/RespawnSystem';
 import type { SoldierClassDefinition } from '../player/SoldierClass';
 import { AISystem, AIBot } from '../ai/AIBot';
+import { SquadManager } from '../ai/SquadManager';
 import { AIStats } from '../ai/AIStats';
 import { VehicleSystem, VehicleType, type Vehicle, type VehicleShot } from '../vehicle/VehicleSystem';
 import { NetworkVehicles } from '../vehicle/NetworkVehicles';
@@ -37,7 +38,7 @@ import { VEHICLE_SIM_CONFIGS, RESPAWN_DELAY_MS, ROUND_RESTART_DELAY_MS } from '.
 import { AudioSystem, SoundType } from '../audio/AudioSystem';
 import { AudioVoiceManager } from '../audio/AudioVoiceManager';
 import { resolveAudibleLayers, computeLayerGain } from '../audio/GunshotLayers';
-import { MapManager } from '../maps/MapManager';
+import { MapManager, type MapId } from '../maps/MapManager';
 import { EquipmentSystem, EquipmentType } from '../equipment/TacticalEquipment';
 import { MineSystem, type MineTriggerTarget } from '../equipment/MineSystem';
 import { WeatherSystem, WeatherType } from '../environment/WeatherSystem';
@@ -204,6 +205,8 @@ export class GameScene {
 
   // AI
   private aiSystem!: AISystem;
+  /** 阶段 10+ 新特性：小队系统 */
+  private squadManager = new SquadManager();
   private readonly aiStats = new AIStats();
 
   // 音频
@@ -211,6 +214,8 @@ export class GameScene {
 
   // 地图
   private mapManager!: MapManager;
+  /** 阶段 10+ 新特性：主菜单选择的地图（默认柏林废墟） */
+  private selectedMapId: MapId = 'berlin_ruins';
 
   // 新手训练场（阶段 10 P1）
   private isTraining = false;
@@ -471,6 +476,7 @@ export class GameScene {
 
     this.mainMenu.onPlay = () => {
       this.mainMenu.hide();
+      this.selectedMapId = this.mainMenu.getSelectedMap();
       this.startGame();
     };
     // 阶段 10 P1：新手训练场入口（训练世界 → 完成后返回主菜单）
@@ -556,7 +562,7 @@ export class GameScene {
     this.stateMachine.transition(GameState.LOADING);
 
     try {
-      await this.initializeGameWorld();
+      await this.initializeGameWorld(false, this.selectedMapId);
     } catch (error) {
       console.error('Failed to initialize game world', error);
       this.stateMachine.transition(GameState.MENU);
@@ -587,7 +593,7 @@ export class GameScene {
     }
   }
 
-  private async initializeGameWorld(training = false): Promise<void> {
+  private async initializeGameWorld(training = false, mapId: MapId = 'berlin_ruins'): Promise<void> {
     this.isTraining = training;
     // 长任务/GC 观测（阶段 9）：进入游戏世界即开始监听
     this.longTaskMonitor.start();
@@ -596,9 +602,9 @@ export class GameScene {
     this.physicsWorld = await PhysicsWorld.init();
     this.physicsWorld.createGround(120);
 
-    // 地图：对战用柏林废墟，训练用训练场
+    // 地图：对战按所选地图（柏林废墟/阿登森林），训练用训练场
     this.mapManager = new MapManager(this.scene);
-    this.mapManager.loadMap(training ? 'training_range' : 'berlin_ruins');
+    this.mapManager.loadMap(training ? 'training_range' : mapId);
     this.environmentObjects = this.mapManager.getCollisionObjects();
 
     // 局部破坏（阶段 7 P0）：预切片对象加入碰撞与 AI 视线，摧毁后移除（训练场保持靶场干净，不布破坏物）
@@ -695,6 +701,8 @@ export class GameScene {
       this.aiSystem.bots,
     );
     this.aiSystem.bots.forEach((_bot, index) => this.aiStats.register(`bot_${index}`, 30 + (index % 5) * 5));
+    // 阶段 10+ 新特性：小队系统——AI 分组（跳过训练场 0 bots）
+    this.assignSquads();
     this.setupAIHealthBars();
     this.setupAIFireCallback();
 
@@ -793,6 +801,21 @@ export class GameScene {
       text: `已部署为${definition.name}：${definition.role}`,
       time: this.simulationTimeMs,
     });
+  }
+
+  /** 阶段 10+ 新特性：把 AI 按阵营分成小队（重生时可在存活队友附近部署） */
+  private assignSquads(): void {
+    const refs = this.aiSystem.bots.map((bot, index) => ({
+      id: `bot_${index}`,
+      team: bot.team,
+      get alive() {
+        return bot.state !== 'dead';
+      },
+      get position() {
+        return { x: bot.mesh.position.x, y: bot.mesh.position.y, z: bot.mesh.position.z };
+      },
+    }));
+    this.squadManager.assignMembers(refs);
   }
 
   private spawnVehicles(): void {
@@ -2270,27 +2293,37 @@ export class GameScene {
       moving,
       this.player?.isCrouchActive() ?? false,
     );
-    direction.x += (gameplayRandom() - 0.5) * spread * 0.05;
-    direction.y += (gameplayRandom() - 0.5) * spread * 0.05;
-    direction.normalize();
 
+    // 霰弹枪多弹丸（阶段 10+ 新特性）：每颗弹丸独立散布 + 独立命中判定
+    const pelletCount = config.pellets ?? 1;
+    const lastEndPoint = this.tmpVec3.copy(origin).addScaledVector(direction, config.range);
     const targets = [
       ...this.aiSystem.getAllTargetableMeshes(),
       ...this.environmentObjects,
       ...this.vehicleSystem.vehicles.filter((v) => !v.destroyed).map((v) => v.mesh),
       ...this.trainingTargets,
     ];
-    const hitInfo = this.raycast.cast(direction, config.range, targets);
 
-    const endPoint = this.tmpVec3.copy(origin).addScaledVector(direction, config.range);
+    for (let pellet = 0; pellet < pelletCount; pellet++) {
+      const pelletDir = this.tmpVec2.clone();
+      this.camera.getWorldDirection(pelletDir);
+      // 每颗弹丸独立散布：单发准度最高（首弹丸散布缩小），其余弹丸完整散布
+      const pelletSpread = pellet === 0 ? spread * 0.4 : spread;
+      pelletDir.x += (gameplayRandom() - 0.5) * pelletSpread * 0.08;
+      pelletDir.y += (gameplayRandom() - 0.5) * pelletSpread * 0.08;
+      pelletDir.z += (gameplayRandom() - 0.5) * pelletSpread * 0.08;
+      pelletDir.normalize();
 
-    if (hitInfo.hit && hitInfo.point) {
-      endPoint.copy(hitInfo.point);
-      this.processHit(hitInfo, config, currentTime);
-      this.spawnImpact(hitInfo.point, hitInfo.normal || direction);
+      const hitInfo = this.raycast.cast(pelletDir, config.range, targets);
+      if (hitInfo.hit && hitInfo.point) {
+        lastEndPoint.copy(hitInfo.point);
+        this.processHit(hitInfo, config, currentTime);
+        this.spawnImpact(hitInfo.point, hitInfo.normal || pelletDir);
+      }
     }
 
-    this.spawnTracer(origin, endPoint);
+    // 中心弹丸的曳光（多弹丸只画一条，代表射击方向）
+    this.spawnTracer(origin, lastEndPoint);
     this.playGunshot(origin);
   }
 
@@ -2910,7 +2943,22 @@ export class GameScene {
     this.spectatorMode.deactivate();
 
     this.healthSystem.respawn();
-    const spawn = this.respawnSystem.getSpawnPoint(currentTime);
+    // 阶段 10+ 新特性：小队重生——优先在存活队友附近部署（距离足够时），否则回据点
+    const playerPos = this.player.getPosition();
+    const candidate = playerPos
+      ? this.squadManager.getSquadRespawnCandidate(this.conquestMode.playerTeam, { x: playerPos.x, z: playerPos.z }, 15)
+      : null;
+    let spawn = this.respawnSystem.getSpawnPoint(currentTime);
+    if (candidate) {
+      spawn = {
+        position: new THREE.Vector3(candidate.position.x, candidate.position.y, candidate.position.z),
+        rotation: new THREE.Euler(0, 0, 0),
+        isOccupied: false,
+        lastUsedTime: 0,
+        cooldown: 0,
+      };
+      this.events.emit('ui:message', { text: '已在小队成员附近重生', time: currentTime });
+    }
     this.physicsWorld.setBodyPosition('player', { x: spawn.position.x, y: spawn.position.y, z: spawn.position.z });
     this.physicsWorld.setBodyLinearVelocity('player', { x: 0, y: 0, z: 0 });
     this.player.resetFallState();

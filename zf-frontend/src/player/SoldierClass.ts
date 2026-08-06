@@ -6,6 +6,8 @@ export enum SoldierClassId {
   MEDIC = 'medic',
   SUPPORT = 'support',
   RECON = 'recon',
+  ENGINEER = 'engineer',
+  MARKSMAN = 'marksman',
 }
 
 export interface SoldierClassDefinition {
@@ -49,6 +51,22 @@ export const SOLDIER_CLASSES: Readonly<Record<SoldierClassId, SoldierClassDefini
     equipment: ['spotting_scope', EquipmentType.SMOKE_GRENADE],
     passive: 'enhanced_spotting',
     role: '远距离精确射击和目标标记',
+  },
+  [SoldierClassId.ENGINEER]: {
+    id: SoldierClassId.ENGINEER,
+    name: '工兵',
+    primaryWeapon: WeaponType.SHOTGUN,
+    equipment: [EquipmentType.FRAG_GRENADE, 'repair_tool'],
+    passive: 'anti_vehicle',
+    role: '近距离突破与载具维修',
+  },
+  [SoldierClassId.MARKSMAN]: {
+    id: SoldierClassId.MARKSMAN,
+    name: '精确射手',
+    primaryWeapon: WeaponType.SEMI_RIFLE,
+    equipment: ['spotting_scope', EquipmentType.SMOKE_GRENADE],
+    passive: 'enhanced_spotting',
+    role: '中远距离半自动精确火力',
   },
 };
 

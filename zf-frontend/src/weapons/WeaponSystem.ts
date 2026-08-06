@@ -6,6 +6,8 @@ export enum WeaponType {
   LMG = 'lmg',
   BOLT_RIFLE = 'bolt_rifle',
   PISTOL = 'pistol',
+  SHOTGUN = 'shotgun',
+  SEMI_RIFLE = 'semi_rifle',
 }
 
 export enum FireMode {
@@ -50,6 +52,8 @@ export interface WeaponConfig {
   boltActionTime?: number;
   /** 瞄具目标 FOV（有值 = 支持光学瞄具，B 键切换；越小放大越强） */
   sightFov?: number;
+  /** 霰弹弹丸数（默认 1 = 单发） */
+  pellets?: number;
 }
 
 export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
@@ -156,6 +160,48 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     firstShotRecoilMultiplier: 1,
     movingSpreadMultiplier: 1.3,
     crouchSpreadMultiplier: 0.8,
+  },
+  [WeaponType.SHOTGUN]: {
+    name: 'M30 霰弹',
+    type: WeaponType.SHOTGUN,
+    fireMode: FireMode.SINGLE,
+    damage: 15,
+    fireRate: 1.5,
+    magazineSize: 2,
+    reloadTime: 2.8,
+    accuracy: 0.5,
+    recoil: 0.12,
+    range: 25,
+    headshotMultiplier: 1.5,
+    bulletSpeed: 500,
+    minDamage: 4,
+    falloffStart: 6,
+    falloffEnd: 25,
+    firstShotRecoilMultiplier: 1.3,
+    movingSpreadMultiplier: 2.5,
+    crouchSpreadMultiplier: 0.7,
+    pellets: 8,
+  },
+  [WeaponType.SEMI_RIFLE]: {
+    name: 'Gewehr 43',
+    type: WeaponType.SEMI_RIFLE,
+    fireMode: FireMode.SINGLE,
+    damage: 42,
+    fireRate: 4.5,
+    magazineSize: 10,
+    reloadTime: 2.2,
+    accuracy: 0.96,
+    recoil: 0.08,
+    range: 150,
+    headshotMultiplier: 2.0,
+    bulletSpeed: 760,
+    minDamage: 25,
+    falloffStart: 50,
+    falloffEnd: 150,
+    firstShotRecoilMultiplier: 1.2,
+    movingSpreadMultiplier: 2.0,
+    crouchSpreadMultiplier: 0.65,
+    sightFov: 42,
   },
 };
 

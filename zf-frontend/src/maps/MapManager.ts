@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Ardennes } from './Ardennes';
 import { BerlinRuins } from './BerlinRuins';
 import { buildMapFromDefinition, type BuiltMapData, type MapDefinition } from './MapDefinition';
 import { TrainingRange } from './TrainingRange';
@@ -8,9 +9,11 @@ export interface SpawnPoint {
   rotation: THREE.Euler;
 }
 
+export type MapId = 'berlin_ruins' | 'ardennes' | 'training_range';
+
 export class MapManager {
   scene: THREE.Scene;
-  currentMap: BerlinRuins | TrainingRange | null = null;
+  currentMap: BerlinRuins | TrainingRange | Ardennes | null = null;
   spawnPoints: SpawnPoint[] = [];
   private builtDefinition: BuiltMapData | null = null;
 
@@ -26,6 +29,9 @@ export class MapManager {
     switch (mapName) {
       case 'berlin_ruins':
         this.currentMap = new BerlinRuins(this.scene);
+        break;
+      case 'ardennes':
+        this.currentMap = new Ardennes(this.scene);
         break;
       case 'training_range':
         this.currentMap = new TrainingRange(this.scene);

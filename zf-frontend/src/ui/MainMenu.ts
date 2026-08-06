@@ -26,6 +26,12 @@ export class MainMenu {
 
   private focusManager: FocusManager | null = null;
 
+  private selectedMap: 'berlin_ruins' | 'ardennes' = 'berlin_ruins';
+
+  getSelectedMap(): 'berlin_ruins' | 'ardennes' {
+    return this.selectedMap;
+  }
+
   constructor() {
     applyThemeRoot();
     this.container = this.createMainMenu();
@@ -59,6 +65,12 @@ export class MainMenu {
           padding: 15px 40px;
           font-size: 20px;
         ">开始游戏</button>
+
+        <div style="display: flex; gap: 8px; justify-content: center;">
+          <button id="map-berlin" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 14px; font-size: 14px; border: 2px solid ${UI_THEME.colors.accent};">柏林废墟</button>
+          <button id="map-ardennes" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 14px; font-size: 14px;">阿登森林</button>
+        </div>
+        <p id="map-hint" style="font-size: 13px; color: ${UI_THEME.colors.textDim}; text-align: center; margin-top: -4px;">当前地图：柏林废墟</p>
 
         <button id="training-button" class="ui-btn ui-btn-ghost" style="
           padding: 15px 40px;
@@ -100,6 +112,25 @@ export class MainMenu {
         this.onPlay?.();
       });
     }
+
+    // 地图选择（阶段 10+ 新特性：第二张地图）
+    const berlinBtn = this.container.querySelector<HTMLElement>('#map-berlin');
+    const ardennesBtn = this.container.querySelector<HTMLElement>('#map-ardennes');
+    const mapHint = this.container.querySelector<HTMLElement>('#map-hint');
+    const MAP_LABELS = { berlin_ruins: '柏林废墟', ardennes: '阿登森林' } as const;
+    const highlight = (selected: 'berlin_ruins' | 'ardennes') => {
+      berlinBtn?.style.setProperty('border-color', selected === 'berlin_ruins' ? UI_THEME.colors.accent : 'transparent');
+      ardennesBtn?.style.setProperty('border-color', selected === 'ardennes' ? UI_THEME.colors.accent : 'transparent');
+      if (mapHint) mapHint.textContent = `当前地图：${MAP_LABELS[selected]}`;
+    };
+    berlinBtn?.addEventListener('click', () => {
+      this.selectedMap = 'berlin_ruins';
+      highlight('berlin_ruins');
+    });
+    ardennesBtn?.addEventListener('click', () => {
+      this.selectedMap = 'ardennes';
+      highlight('ardennes');
+    });
 
     if (this.elements.trainingButton) {
       this.elements.trainingButton.addEventListener('click', () => {
