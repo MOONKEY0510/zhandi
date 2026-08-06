@@ -51,6 +51,10 @@ export class NetworkGameClient {
   onDestructibleState: ((msg: DestructibleStateMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
+  /** 阶段 10：断线后每次调度重连时触发（UI 显示“正在重连”） */
+  onReconnectScheduled: ((attempt: number, delayMs: number) => void) | null = null;
+  /** 阶段 10：重连握手成功时触发（UI 恢复） */
+  onReconnectSuccess: (() => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
   onPredictionReconcile: ((result: unknown) => void) | null = null;
 
@@ -92,6 +96,8 @@ export class NetworkGameClient {
     this.client.onDestructibleState = (msg) => this.onDestructibleState?.(msg);
     this.client.onError = (code, message) => this.onError?.(code, message);
     this.client.onDisconnect = (reason) => this.onDisconnect?.(reason);
+    this.client.onReconnectScheduled = (attempt, delayMs) => this.onReconnectScheduled?.(attempt, delayMs);
+    this.client.onReconnectSuccess = () => this.onReconnectSuccess?.();
     this.client.onPredictionReconcile = (result) => this.onPredictionReconcile?.(result);
 
     await this.client.connect();

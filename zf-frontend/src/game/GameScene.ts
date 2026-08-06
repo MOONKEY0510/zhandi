@@ -16,6 +16,7 @@ import { WeaponView } from '../weapons/WeaponView';
 import { MuzzleFlash } from '../weapons/MuzzleFlash';
 import { Raycast, calculateDamage } from '../weapons/Bullet';
 import { HUD } from '../ui/HUD';
+import { ConnectionStatusOverlay } from '../ui/ConnectionStatusOverlay';
 import { MainMenu } from '../ui/MainMenu';
 import { SettingsMenu, type GameSettings } from '../ui/SettingsMenu';
 import { Scoreboard } from '../ui/Scoreboard';
@@ -127,6 +128,8 @@ export class GameScene {
   private player: PlayerController | null = null;
   private inputManager: InputManager;
   private networkGameClient: NetworkGameClient | null = null;
+  /** 阶段 10：断线/重连状态覆盖层（可恢复操作：重试/返回主菜单） */
+  private connectionOverlay: ConnectionStatusOverlay | null = null;
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
   /** 联网模式本人存活状态（服务端快照驱动；死亡表现/重生传送/输入门控用） */
@@ -974,6 +977,22 @@ export class GameScene {
 
   async connectToServer(wsUrl: string, playerId: string): Promise<void> {
     this.networkGameClient = new NetworkGameClient();
+    this.connectionOverlay = new ConnectionStatusOverlay();
+    // 阶段 10：断线提示/重连状态/服务器错误 → 可恢复操作
+    this.networkGameClient.onReconnectScheduled = (attempt, delayMs) => {
+      this.connectionOverlay?.showReconnecting(attempt, delayMs);
+    };
+    this.networkGameClient.onReconnectSuccess = () => {
+      this.connectionOverlay?.showConnected();
+    };
+    this.networkGameClient.onDisconnect = (reason) => {
+      if (reason === 'max_reconnects') {
+        this.connectionOverlay?.showFailed(
+          () => void this.connectToServer(wsUrl, playerId),
+          () => this.exitToMainMenu(),
+        );
+      }
+    };
     this.networkGameClient.onPlayerLeave = (id) => this.removeRemotePlayer(id);
     this.networkGameClient.onKillFeed = (msg) => {
       // 击杀反馈：本人击杀/死亡计入 K/D（服务端权威），其余玩家消息进 HUD 击杀列表
@@ -1040,6 +1059,18 @@ export class GameScene {
     const winnerEl = this.roundOverlay.querySelector('#round-winner');
     if (winnerEl) winnerEl.textContent = winnerText;
     this.roundOverlay.style.display = 'flex';
+  }
+
+  /** 阶段 10：连接失败后的可恢复操作——返回主菜单（断开网络 + 重置状态） */
+  private exitToMainMenu(): void {
+    this.connectionOverlay?.dispose();
+    this.connectionOverlay = null;
+    this.networkGameClient?.disconnect();
+    this.networkGameClient = null;
+    this.serverGameState = null;
+    this.clientPrediction = null;
+    this.stateMachine.transition(GameState.MENU);
+    this.mainMenu.show();
   }
 
   /**
@@ -2910,6 +2941,8 @@ export class GameScene {
     }
     this.longTaskMonitor.stop();
     cancelAnimationFrame(this.animationId);
+    this.connectionOverlay?.dispose();
+    this.connectionOverlay = null;
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();

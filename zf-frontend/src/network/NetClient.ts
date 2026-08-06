@@ -143,6 +143,10 @@ export class NetClient {
   onDestructibleState: ((msg: DestructibleStateMsg) => void) | null = null;
   onError: ((code: string, message: string) => void) | null = null;
   onDisconnect: ((reason: string) => void) | null = null;
+  /** 阶段 10：断线后每次调度重连时触发（UI 显示“正在重连”） */
+  onReconnectScheduled: ((attempt: number, delayMs: number) => void) | null = null;
+  /** 阶段 10：重连握手成功时触发（UI 恢复） */
+  onReconnectSuccess: (() => void) | null = null;
   /** 房间内玩家离开（超时清理/主动退出），用于移除远端实体 */
   onPlayerLeave: ((playerId: string, reason: 'left' | 'timeout' | 'kicked') => void) | null = null;
   /** 每次快照校正本人预测后回调（统计/调试用） */
@@ -339,6 +343,7 @@ export class NetClient {
       return;
     }
     const delay = this.options.reconnectBaseDelayMs * 2 ** this.reconnectAttempts;
+    this.onReconnectScheduled?.(this.reconnectAttempts + 1, delay);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.reconnect();
@@ -382,15 +387,18 @@ export class NetClient {
     }
 
     switch (msg.kind) {
-      case 'hello_ack':
+      case 'hello_ack': {
         this.connected = true;
+        const wasReconnecting = this.reconnectAttempts > 0;
         this.reconnectAttempts = 0; // 握手成功：重连计数复位
+        if (wasReconnecting) this.onReconnectSuccess?.();
         if (this.helloTimer) {
           clearTimeout(this.helloTimer);
           this.helloTimer = null;
         }
         this.helloAttempts = 0;
         break;
+      }
       case 'join_ack':
         this.roomId = msg.roomId;
         this.joinedRoom = true;

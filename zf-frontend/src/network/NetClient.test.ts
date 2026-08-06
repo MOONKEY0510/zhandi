@@ -328,4 +328,41 @@ describe('NetClient（阶段 8 协议客户端）', () => {
       vi.useRealTimers();
     }
   });
+
+  it('阶段 10：断线调度重连触发 onReconnectScheduled，重连成功触发 onReconnectSuccess', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = NetClient.withTransport(transport, 'p1', '玩家一', {
+        pingIntervalMs: 0,
+        maxReconnects: 3,
+        reconnectBaseDelayMs: 100,
+      });
+      await client.connect();
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 1 });
+      const scheduled: { attempt: number; delayMs: number }[] = [];
+      let successes = 0;
+      client.onReconnectScheduled = (attempt, delayMs) => scheduled.push({ attempt, delayMs });
+      client.onReconnectSuccess = () => {
+        successes += 1;
+      };
+
+      transport.close(); // 断线 → 调度第 1 次重连
+      expect(scheduled).toEqual([{ attempt: 1, delayMs: 100 }]);
+
+      // 重连握手成功：onReconnectSuccess 触发，计数复位
+      await vi.advanceTimersByTimeAsync(150);
+      transport.inject({ kind: 'hello_ack', protocolVersion: PROTOCOL_VERSION, serverTick: 2 });
+      expect(successes).toBe(1);
+
+      // 再次断线：仍从第 1 次开始（计数已复位）
+      transport.close();
+      expect(scheduled).toEqual([
+        { attempt: 1, delayMs: 100 },
+        { attempt: 1, delayMs: 100 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
