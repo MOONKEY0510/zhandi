@@ -23,6 +23,8 @@ export type KeyActionId =
   | 'lean_left'
   | 'lean_right'
   | 'scope'
+  | 'mark_target'
+  | 'artillery'
   | 'vehicle'
   | 'seat'
   | 'weather'
@@ -52,6 +54,8 @@ export const DEFAULT_KEY_BINDINGS: Readonly<KeyBindings> = {
   lean_left: 'KeyQ',
   lean_right: 'KeyE',
   scope: 'KeyB',
+  mark_target: 'KeyM',
+  artillery: 'KeyH',
   vehicle: 'KeyX',
   seat: 'KeyF',
   weather: 'KeyT',
@@ -81,6 +85,8 @@ export const KEY_ACTION_LABELS: Readonly<Record<KeyActionId, string>> = {
   lean_left: '左侧身',
   lean_right: '右侧身',
   scope: '切换瞄具',
+  mark_target: '小队标记',
+  artillery: '呼叫炮击',
   vehicle: '进入/离开载具',
   seat: '切换座位',
   weather: '切换天气',

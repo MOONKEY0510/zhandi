@@ -18,7 +18,17 @@ export interface Squad {
   id: number;
   team: TeamId;
   members: SquadMemberRef[];
+  /** 队长成员 id（阵亡后自动转移给下一个存活成员） */
+  leaderId: string | null;
 }
+
+export interface SquadMark {
+  position: { x: number; y: number; z: number };
+  markedAt: number;
+  markedBy: string;
+}
+
+export const SQUAD_MARK_TTL_MS = 10_000;
 
 export interface RespawnCandidate {
   position: { x: number; y: number; z: number };
@@ -48,6 +58,7 @@ export class SquadManager {
           id: this.nextSquadId++,
           team,
           members: list.slice(i, i + squadSize),
+          leaderId: list[i]?.id ?? null,
         });
       }
     }
@@ -98,4 +109,53 @@ export class SquadManager {
     const total = squads.flatMap((s) => s.members).length;
     return `友军小队：存活 ${alive}/${total}`;
   }
+
+  // ===== 小队队长（阶段 10+ 新特性：队长标记） =====
+
+  /** 小队当前队长；队长阵亡时自动转移给队内下一个存活成员 */
+  getSquadLeader(team: TeamId): SquadMemberRef | null {
+    for (const squad of this.getSquadsForTeam(team)) {
+      if (squad.leaderId) {
+        const current = squad.members.find((m) => m.id === squad.leaderId);
+        if (current?.alive) return current;
+        // 队长阵亡 → 转移领导权
+        const next = squad.members.find((m) => m.alive);
+        squad.leaderId = next?.id ?? null;
+        if (next) return next;
+      } else {
+        const next = squad.members.find((m) => m.alive);
+        squad.leaderId = next?.id ?? null;
+        if (next) return next;
+      }
+    }
+    return null;
+  }
+
+  /** 指定成员是否为所属小队队长 */
+  isLeader(memberId: string): boolean {
+    return this.squads.some((s) => s.leaderId === memberId);
+  }
+
+  // ===== 小队标记（队长/玩家标记目标，全队集火） =====
+
+  private squadMarks = new Map<TeamId, SquadMark>();
+
+  setSquadMark(team: TeamId, position: { x: number; y: number; z: number }, markedBy: string): void {
+    this.squadMarks.set(team, { position: { ...position }, markedAt: performance.now(), markedBy });
+  }
+
+  getSquadMark(team: TeamId, now?: number): SquadMark | null {
+    const mark = this.squadMarks.get(team);
+    if (!mark) return null;
+    if (now !== undefined && now - mark.markedAt > SQUAD_MARK_TTL_MS) {
+      this.squadMarks.delete(team);
+      return null;
+    }
+    return mark;
+  }
+
+  clearSquadMark(team: TeamId): void {
+    this.squadMarks.delete(team);
+  }
 }
+

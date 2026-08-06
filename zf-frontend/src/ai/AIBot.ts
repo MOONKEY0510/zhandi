@@ -5,6 +5,7 @@ import { AIPerception } from './AIPerception';
 import { getAILodBudget } from './AILod';
 import { evaluateAIVisibility, type SmokeVolume } from './AIVisibility';
 import { decideTacticalAction, type AITacticalAction, type AITacticalDecision } from './SquadTactics';
+import { SQUAD_MARK_TTL_MS } from './SquadManager';
 import {
   VEHICLE_DETECTION_MULTIPLIER,
   findNearestEnemyVehicle,
@@ -123,6 +124,10 @@ export class AIBot {
   patrolPath: PatrolPoint[] = [];
   currentPatrolIndex: number = 0;
   target: THREE.Object3D | null = null;
+  /** 小队标记（阶段 10+ 新特性：队长标记 → 全队优先集火标记位置附近敌人） */
+  squadMark: { position: THREE.Vector3; markedAt: number } | null = null;
+  /** 查找标记位置附近敌人（GameScene 注入：返回敌方 bot mesh 或 null） */
+  findMarkedEnemy: ((position: THREE.Vector3) => THREE.Object3D | null) | null = null;
   /** 反载具目标（阶段 7 P1）：target 指向其 mesh 时生效 */
   targetVehicle: VehicleTarget | null = null;
   private targetIsVehicle = false;
@@ -583,6 +588,29 @@ export class AIBot {
     }
   }
 
+  setSquadMark(position: THREE.Vector3): void {
+    this.squadMark = { position: position.clone(), markedAt: performance.now() };
+  }
+
+  clearSquadMark(): void {
+    this.squadMark = null;
+  }
+
+  /** 小队标记有效期内且当前未交战 → 优先把标记位置附近敌人设为目标 */
+  private applySquadMarkOverride(currentTime: number): void {
+    if (!this.squadMark) return;
+    if (currentTime - this.squadMark.markedAt > SQUAD_MARK_TTL_MS) {
+      this.squadMark = null;
+      return;
+    }
+    // 已有明确交战目标时不打断（防止反复切换目标）
+    if (this.target && this.lastTargetVisible) return;
+    const enemy = this.findMarkedEnemy?.(this.squadMark.position);
+    if (enemy && enemy !== this.target) {
+      this.setTarget(enemy);
+    }
+  }
+
   update(deltaTime: number, currentTime: number, playerPosition: THREE.Vector3): void {
     if (this.state === AIState.DEAD) {
       // 死亡红闪动画（尸体短暂闪烁后稳定）
@@ -671,6 +699,9 @@ export class AIBot {
         this.hasAcquiredTarget = true;
       }
     }
+
+    // 小队标记优先集火（阶段 10+ 新特性）
+    this.applySquadMarkOverride(currentTime);
 
     // 状态机
     switch (this.state) {

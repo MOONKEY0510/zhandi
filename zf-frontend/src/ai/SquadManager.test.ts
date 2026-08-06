@@ -61,4 +61,36 @@ describe('SquadManager', () => {
     expect(manager.describeSquad(TeamId.ALLIES)).toBe('友军小队：存活 1/2');
     expect(manager.describeSquad(TeamId.AXIS)).toBeNull();
   });
+
+  it('队长：每队首成员为队长，队长阵亡后自动转移', () => {
+    const manager = new SquadManager();
+    manager.assignMembers([
+      member('a1', TeamId.ALLIES, true, 0, 0),
+      member('a2', TeamId.ALLIES, true, 1, 0),
+      member('a3', TeamId.ALLIES, true, 2, 0),
+    ]);
+    const leader = manager.getSquadLeader(TeamId.ALLIES);
+    expect(leader).not.toBeNull();
+    expect(leader!.id).toBe('a1');
+    expect(manager.isLeader('a1')).toBe(true);
+    expect(manager.isLeader('a2')).toBe(false);
+  });
+
+  it('小队标记：设置/获取/过期/清除', () => {
+    const manager = new SquadManager();
+    manager.setSquadMark(TeamId.ALLIES, { x: 10, y: 0, z: 20 }, 'player');
+    const mark = manager.getSquadMark(TeamId.ALLIES, performance.now());
+    expect(mark).not.toBeNull();
+    expect(mark!.position.x).toBe(10);
+    expect(mark!.markedBy).toBe('player');
+
+    // 过期
+    const expired = manager.getSquadMark(TeamId.ALLIES, performance.now() + 20_000);
+    expect(expired).toBeNull();
+
+    // 清除
+    manager.setSquadMark(TeamId.AXIS, { x: 0, y: 0, z: 0 }, 'bot');
+    manager.clearSquadMark(TeamId.AXIS);
+    expect(manager.getSquadMark(TeamId.AXIS)).toBeNull();
+  });
 });

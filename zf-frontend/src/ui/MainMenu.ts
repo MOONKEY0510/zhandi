@@ -26,9 +26,9 @@ export class MainMenu {
 
   private focusManager: FocusManager | null = null;
 
-  private selectedMap: 'berlin_ruins' | 'ardennes' = 'berlin_ruins';
+  private selectedMap: 'berlin_ruins' | 'ardennes' | 'normandy_beach' = 'berlin_ruins';
 
-  getSelectedMap(): 'berlin_ruins' | 'ardennes' {
+  getSelectedMap(): 'berlin_ruins' | 'ardennes' | 'normandy_beach' {
     return this.selectedMap;
   }
 
@@ -67,8 +67,9 @@ export class MainMenu {
         ">开始游戏</button>
 
         <div style="display: flex; gap: 8px; justify-content: center;">
-          <button id="map-berlin" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 14px; font-size: 14px; border: 2px solid ${UI_THEME.colors.accent};">柏林废墟</button>
-          <button id="map-ardennes" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 14px; font-size: 14px;">阿登森林</button>
+          <button id="map-berlin" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 12px; font-size: 13px; border: 2px solid ${UI_THEME.colors.accent};">柏林</button>
+          <button id="map-ardennes" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 12px; font-size: 13px;">阿登</button>
+          <button id="map-normandy" class="ui-btn ui-btn-ghost map-select" style="padding: 10px 12px; font-size: 13px;">诺曼底</button>
         </div>
         <p id="map-hint" style="font-size: 13px; color: ${UI_THEME.colors.textDim}; text-align: center; margin-top: -4px;">当前地图：柏林废墟</p>
 
@@ -116,11 +117,13 @@ export class MainMenu {
     // 地图选择（阶段 10+ 新特性：第二张地图）
     const berlinBtn = this.container.querySelector<HTMLElement>('#map-berlin');
     const ardennesBtn = this.container.querySelector<HTMLElement>('#map-ardennes');
+    const normandyBtn = this.container.querySelector<HTMLElement>('#map-normandy');
     const mapHint = this.container.querySelector<HTMLElement>('#map-hint');
-    const MAP_LABELS = { berlin_ruins: '柏林废墟', ardennes: '阿登森林' } as const;
-    const highlight = (selected: 'berlin_ruins' | 'ardennes') => {
+    const MAP_LABELS = { berlin_ruins: '柏林废墟', ardennes: '阿登森林', normandy_beach: '诺曼底海滩' } as const;
+    const highlight = (selected: 'berlin_ruins' | 'ardennes' | 'normandy_beach') => {
       berlinBtn?.style.setProperty('border-color', selected === 'berlin_ruins' ? UI_THEME.colors.accent : 'transparent');
       ardennesBtn?.style.setProperty('border-color', selected === 'ardennes' ? UI_THEME.colors.accent : 'transparent');
+      normandyBtn?.style.setProperty('border-color', selected === 'normandy_beach' ? UI_THEME.colors.accent : 'transparent');
       if (mapHint) mapHint.textContent = `当前地图：${MAP_LABELS[selected]}`;
     };
     berlinBtn?.addEventListener('click', () => {
@@ -130,6 +133,10 @@ export class MainMenu {
     ardennesBtn?.addEventListener('click', () => {
       this.selectedMap = 'ardennes';
       highlight('ardennes');
+    });
+    normandyBtn?.addEventListener('click', () => {
+      this.selectedMap = 'normandy_beach';
+      highlight('normandy_beach');
     });
 
     if (this.elements.trainingButton) {

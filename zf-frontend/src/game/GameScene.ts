@@ -207,6 +207,16 @@ export class GameScene {
   private aiSystem!: AISystem;
   /** 阶段 10+ 新特性：小队系统 */
   private squadManager = new SquadManager();
+  /** 阶段 10+ 新特性：小队标记 HUD 环（世界空间指示器） */
+  private squadMarkerRing: THREE.Mesh | null = null;
+  private squadMarkExpiresAt = 0;
+  /** 阶段 10+ 新特性：呼叫炮击冷却 */
+  private artilleryCooldownUntil = 0;
+  private readonly ARTILLERY_COOLDOWN = 45_000;
+  private readonly ARTILLERY_RADIUS = 8;
+  private readonly ARTILLERY_DAMAGE = 90;
+  private readonly ARTILLERY_SALVO = 6;
+  private artilleryStrikes: { time: number; position: THREE.Vector3 }[] = [];
   private readonly aiStats = new AIStats();
 
   // 音频
@@ -816,6 +826,18 @@ export class GameScene {
       },
     }));
     this.squadManager.assignMembers(refs);
+
+    // 为每个 bot 注入标记查找回调（找标记位置 10m 内的敌方 bot）
+    for (const bot of this.aiSystem.bots) {
+      bot.findMarkedEnemy = (pos: THREE.Vector3) => {
+        for (const other of this.aiSystem.bots) {
+          if (other.team !== bot.team && other.state !== 'dead' && other.mesh.position.distanceTo(pos) < 10) {
+            return other.mesh;
+          }
+        }
+        return null;
+      };
+    }
   }
 
   private spawnVehicles(): void {
@@ -924,6 +946,16 @@ export class GameScene {
 
     this.inputManager.onGrenade(() => {
       this.throwEquipment();
+    });
+
+    // 阶段 10+ 新特性：小队标记 M——标记视线内敌人，全队集火
+    this.inputManager.onMarkTarget(() => {
+      this.markSquadTarget();
+    });
+
+    // 阶段 10+ 新特性：呼叫炮击 H——延迟弹幕轰炸目标区域
+    this.inputManager.onArtillery(() => {
+      this.callArtillery();
     });
 
     this.inputManager.onEquipmentSwitch((slot) => {
@@ -1719,6 +1751,126 @@ export class GameScene {
         (sprite.material as THREE.SpriteMaterial).map?.dispose();
         sprite.material.dispose();
         this.damageNumbers.splice(i, 1);
+      }
+    }
+  }
+
+  // ====== 小队标记（阶段 10+ 新特性：M 键） ======
+
+  private markSquadTarget(): void {
+    if (this.healthSystem.isDead || this.inVehicle) return;
+
+    // 从屏幕中心射线检测
+    const dir = this.tmpVec2;
+    this.camera.getWorldDirection(dir);
+    const targets = [
+      ...this.aiSystem.bots.map((b) => b.mesh),
+    ];
+    const hit = this.raycast.cast(dir, 200, targets);
+    if (!hit.hit || !hit.target) {
+      this.hud.addKillMessage('标记失败：未命中敌人', this.simulationTimeMs);
+      return;
+    }
+
+    // 找到命中的 bot
+    const hitBot = this.aiSystem.bots.find((b) => b.mesh === hit.target);
+    if (!hitBot || hitBot.team === this.conquestMode.playerTeam) {
+      this.hud.addKillMessage('标记失败：目标为友方', this.simulationTimeMs);
+      return;
+    }
+
+    const pos = hitBot.mesh.position;
+    this.squadManager.setSquadMark(this.conquestMode.playerTeam, { x: pos.x, y: pos.y, z: pos.z }, 'player');
+
+    // 通知所有同阵营 AI 集火标记位置
+    const playerTeam = this.conquestMode.playerTeam;
+    for (const bot of this.aiSystem.bots) {
+      if (bot.team === playerTeam && bot.state !== 'dead') {
+        bot.setSquadMark(pos.clone());
+      }
+    }
+
+    // 世界空间标记环
+    this.spawnSquadMarkerRing(pos);
+    this.squadMarkExpiresAt = this.simulationTimeMs + 10_000;
+
+    this.hud.addKillMessage('小队标记：目标已标记，队员正在集火', this.simulationTimeMs);
+  }
+
+  private spawnSquadMarkerRing(targetPos: THREE.Vector3): void {
+    if (this.squadMarkerRing) this.scene.remove(this.squadMarkerRing);
+    const geometry = new THREE.RingGeometry(0.8, 1.0, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xff4400,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.8,
+    });
+    const ring = new THREE.Mesh(geometry, material);
+    ring.position.copy(targetPos);
+    ring.position.y += 2.2;
+    ring.rotation.x = -Math.PI / 2;
+    this.scene.add(ring);
+    this.squadMarkerRing = ring;
+  }
+
+  private updateSquadMarker(currentTime: number): void {
+    if (!this.squadMarkerRing) return;
+    if (currentTime > this.squadMarkExpiresAt) {
+      this.scene.remove(this.squadMarkerRing);
+      this.squadMarkerRing = null;
+      return;
+    }
+    // 旋转 + 慢慢缩小
+    this.squadMarkerRing.rotation.z += 0.02;
+    const t = 1 - (this.squadMarkExpiresAt - currentTime) / 10_000;
+    const scale = 1 - t * 0.5;
+    this.squadMarkerRing.scale.setScalar(scale);
+  }
+
+  // ====== 呼叫炮击（阶段 10+ 新特性：H 键） ======
+
+  private callArtillery(): void {
+    if (this.healthSystem.isDead || this.inVehicle) return;
+    if (this.simulationTimeMs < this.artilleryCooldownUntil) {
+      const remaining = Math.ceil((this.artilleryCooldownUntil - this.simulationTimeMs) / 1000);
+      this.hud.addKillMessage(`炮击冷却中：${remaining} 秒`, this.simulationTimeMs);
+      return;
+    }
+
+    // 目标点：视线命中点，无命中则取正前方 60m
+    const origin = this.camera.getWorldPosition(this.tmpVec1);
+    const dir = this.tmpVec2;
+    this.camera.getWorldDirection(dir);
+    const targets = [...this.environmentObjects];
+    const hit = this.raycast.cast(dir, 120, targets);
+
+    const target = hit.hit && hit.point
+      ? hit.point.clone()
+      : origin.clone().add(dir.clone().multiplyScalar(60));
+
+    // 弹幕计划：1.5s 后开始，6 发间隔 0.3s，随机散布在 8m 半径内
+    this.artilleryStrikes = [];
+    const startTime = this.simulationTimeMs + 1800;
+    for (let i = 0; i < this.ARTILLERY_SALVO; i++) {
+      const offsetX = (gameplayRandom() - 0.5) * this.ARTILLERY_RADIUS * 2;
+      const offsetZ = (gameplayRandom() - 0.5) * this.ARTILLERY_RADIUS * 2;
+      this.artilleryStrikes.push({
+        time: startTime + i * 300,
+        position: new THREE.Vector3(target.x + offsetX, target.y, target.z + offsetZ),
+      });
+    }
+
+    this.artilleryCooldownUntil = this.simulationTimeMs + this.ARTILLERY_COOLDOWN;
+    this.hud.addKillMessage('炮击已呼叫，弹幕即将落下...', this.simulationTimeMs);
+  }
+
+  private updateArtillery(currentTime: number): void {
+    if (this.artilleryStrikes.length === 0) return;
+    for (let i = this.artilleryStrikes.length - 1; i >= 0; i--) {
+      if (currentTime >= this.artilleryStrikes[i].time) {
+        this.applyExplosion(this.artilleryStrikes[i].position, 5, this.ARTILLERY_DAMAGE, 1.5);
+        this.artilleryStrikes.splice(i, 1);
       }
     }
   }
@@ -3177,6 +3329,11 @@ export class GameScene {
     // 阶段 10+ 新特性：压制效果衰减（每秒衰减 suppressionDecay，HUD 实时更新）
     this.suppressionTimer = Math.max(0, this.suppressionTimer - this.suppressionDecay * dt);
     this.hud.setSuppression(this.suppressionTimer);
+
+    // 小队标记环旋转 + 过期（阶段 10+ 新特性）
+    this.updateSquadMarker(time);
+    // 呼叫炮击弹幕（阶段 10+ 新特性）
+    this.updateArtillery(time);
 
     // 新手训练场（阶段 10 P1）：位置类步骤检测（移动标记点/机动障碍区）
     if (this.trainingMode) {

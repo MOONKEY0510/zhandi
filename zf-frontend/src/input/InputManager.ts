@@ -27,6 +27,8 @@ export type EscapeCallback = () => void;
 export type WeatherToggleCallback = () => void;
 export type MeleeCallback = () => void;
 export type ScopeCallback = () => void;
+export type MarkTargetCallback = () => void;
+export type ArtilleryCallback = () => void;
 
 export class InputManager {
   private keys: Set<string> = new Set();
@@ -45,6 +47,8 @@ export class InputManager {
   private weatherToggleCallbacks: WeatherToggleCallback[] = [];
   private meleeCallbacks: MeleeCallback[] = [];
   private scopeCallbacks: ScopeCallback[] = [];
+  private markTargetCallbacks: MarkTargetCallback[] = [];
+  private artilleryCallbacks: ArtilleryCallback[] = [];
 
   public state: InputState = {
     forward: false, backward: false, left: false, right: false,
@@ -117,6 +121,14 @@ export class InputManager {
     // 切换瞄具 B
     if (actions.includes('scope') && !this.keys.has(e.code)) {
       this.scopeCallbacks.forEach(cb => cb());
+    }
+    // 小队标记 M
+    if (actions.includes('mark_target') && !this.keys.has(e.code)) {
+      this.markTargetCallbacks.forEach(cb => cb());
+    }
+    // 呼叫炮击 H
+    if (actions.includes('artillery') && !this.keys.has(e.code)) {
+      this.artilleryCallbacks.forEach(cb => cb());
     }
     // Esc 设置
     if (actions.includes('escape')) {
@@ -218,6 +230,8 @@ export class InputManager {
   onWeaponSwitch(cb: WeaponSwitchCallback): void { this.weaponSwitchCallbacks.push(cb); }
   onReloadPressed(cb: ReloadCallback): void { this.reloadPressedCallbacks.push(cb); }
   onGrenade(cb: GrenadeCallback): void { this.grenadeCallbacks.push(cb); }
+  onMarkTarget(cb: MarkTargetCallback): void { this.markTargetCallbacks.push(cb); }
+  onArtillery(cb: ArtilleryCallback): void { this.artilleryCallbacks.push(cb); }
   onEquipmentSwitch(cb: EquipmentSwitchCallback): void { this.equipmentSwitchCallbacks.push(cb); }
   onVehicleToggle(cb: VehicleToggleCallback): void { this.vehicleToggleCallbacks.push(cb); }
   onSeatSwitch(cb: SeatSwitchCallback): void { this.seatSwitchCallbacks.push(cb); }
