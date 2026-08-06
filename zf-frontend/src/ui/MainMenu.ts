@@ -38,7 +38,7 @@ export class MainMenu {
       width: 100%;
       height: 100%;
       background: ${UI_THEME.colors.bgGradient};
-      display: flex;
+      display: none;
       flex-direction: column;
       align-items: center;
       justify-content: center;

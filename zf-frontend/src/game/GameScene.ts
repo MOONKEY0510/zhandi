@@ -22,6 +22,8 @@ import { MainMenu } from '../ui/MainMenu';
 import { SettingsMenu, type GameSettings } from '../ui/SettingsMenu';
 import { Scoreboard } from '../ui/Scoreboard';
 import { DeploymentMenu } from '../ui/DeploymentMenu';
+import { FirstRunWizard } from '../ui/FirstRunWizard';
+import { savePlayerProfile, isFirstRun } from '../config/PlayerProfile';
 import { HealthSystem } from '../player/HealthSystem';
 import { RespawnSystem } from '../player/RespawnSystem';
 import type { SoldierClassDefinition } from '../player/SoldierClass';
@@ -133,6 +135,8 @@ export class GameScene {
   private connectionOverlay: ConnectionStatusOverlay | null = null;
   /** 阶段 10：字幕覆盖层（关键音频信息的视觉替代；showSubtitles 开关） */
   private subtitleOverlay!: SubtitleOverlay;
+  /** 阶段 10：首次设置向导（新用户流程闭环入口） */
+  private firstRunWizard!: FirstRunWizard;
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
   /** 联网模式本人存活状态（服务端快照驱动；死亡表现/重生传送/输入门控用） */
@@ -397,6 +401,7 @@ export class GameScene {
     this.scoreboard = new Scoreboard();
     this.deploymentMenu = new DeploymentMenu();
     this.subtitleOverlay = new SubtitleOverlay();
+    this.firstRunWizard = new FirstRunWizard();
     this.deploymentMenu.onDeploy = (definition) => this.deployAs(definition);
 
     this.mainMenu.onPlay = () => {
@@ -418,7 +423,30 @@ export class GameScene {
       this.resumeFromSettings();
     };
 
+    // 阶段 10：首次设置向导 → 完成后进入主菜单（完整流程闭环入口）
+    this.firstRunWizard.onComplete = (result) => {
+      savePlayerProfile({
+        nickname: result.nickname,
+        completedSetup: true,
+        completedAt: Date.now(),
+      });
+      this.applySettings({
+        ...loadGameSettings(),
+        graphics: result.graphics,
+        volumeMaster: result.volumeMaster,
+        sensitivity: result.sensitivity,
+        showSubtitles: result.showSubtitles,
+      });
+      this.firstRunWizard.hide();
+      this.mainMenu.show();
+    };
+
     this.stateMachine.transition(GameState.MENU);
+    if (isFirstRun()) {
+      this.firstRunWizard.show();
+    } else {
+      this.mainMenu.show();
+    }
     this.animate(performance.now());
   }
 
@@ -2957,6 +2985,7 @@ export class GameScene {
     this.connectionOverlay?.dispose();
     this.connectionOverlay = null;
     this.subtitleOverlay?.dispose();
+    this.firstRunWizard?.dispose();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
