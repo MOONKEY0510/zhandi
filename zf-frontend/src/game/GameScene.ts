@@ -53,8 +53,13 @@ import { ConquestPresenter } from './ConquestPresenter';
 import { AchievementSystem, AchievementType } from './AchievementSystem';
 import { ConquestMode, TeamId, objectiveOwnerToTeam } from './ConquestMode';
 import { RoundFlow, RoundPhase } from './RoundFlow';
+import { SpectatorMode } from './SpectatorMode';
 import { TrainingMode, type TrainingStepId } from '../training/TrainingMode';
 import { TrainingOverlay } from '../ui/TrainingOverlay';
+import { ReplayPanel } from '../ui/ReplayPanel';
+import { ReportDialog, type ReportablePlayer } from '../ui/ReportDialog';
+import { ReplayRecorder } from '../replay/ReplayRecorder';
+import { addReport } from '../config/Reports';
 import { TRAINING_LAYOUT } from '../maps/TrainingRange';
 
 const WEAPON_ORDER: WeaponType[] = [
@@ -198,6 +203,13 @@ export class GameScene {
   private trainingMode: TrainingMode | null = null;
   private trainingOverlay!: TrainingOverlay;
   private trainingTargets: THREE.Object3D[] = [];
+
+  // 回放 / 观战 / 举报（阶段 10 P1）
+  private replayRecorder: ReplayRecorder | null = null;
+  private replayPanel!: ReplayPanel;
+  private spectatorMode = new SpectatorMode();
+  private reportDialog!: ReportDialog;
+  private scoreboardPlayers: ReportablePlayer[] = [];
 
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
@@ -377,6 +389,9 @@ export class GameScene {
     };
     this.roundFlow.onRestart = () => {
       this.conquestMode?.reset();
+      // 阶段 10 P1：新回合重新录制回放 + 退出观战（返回部署）
+      this.replayRecorder = this.isTraining ? null : new ReplayRecorder(this.simulationTimeMs);
+      this.spectatorMode.deactivate();
       this.selectedClass = null;
       this.deploymentMenu?.show();
       if (this.stateMachine.is(GameState.ROUND_END)) this.stateMachine.transition(GameState.PAUSED);
@@ -397,13 +412,22 @@ export class GameScene {
       this.gameMode?.addKill(this.playerId, 'bot');
       this.achievementSystem?.updateProgress(this.playerId, AchievementType.KILLS, 1);
       if (headshot) this.achievementSystem?.updateProgress(this.playerId, AchievementType.HEADSHOTS, 1);
+      // 阶段 10 P1：回放录制击杀事件
+      this.replayRecorder?.record('kill', label, {
+        team: victimTeam === TeamId.AXIS ? 'A' : 'B',
+        detail: headshot ? '爆头' : undefined,
+      });
     });
     this.events.on('player:death', ({ team }) => {
       this.deathCount++;
       this.conquestMode?.onPlayerDeath(team);
+      // 阶段 10 P1：回放录制阵亡事件
+      this.replayRecorder?.record('death', '你被击杀了', { team: team === TeamId.AXIS ? 'A' : 'B' });
     });
     this.events.on('round:end', ({ winnerName, time }) => {
       this.events.emit('ui:message', { text: `游戏结束！${winnerName} 获胜！`, time });
+      // 阶段 10 P1：回放录制结算事件
+      this.replayRecorder?.record('round_end', `游戏结束！${winnerName} 获胜！`);
       this.roundFlow.finishRound();
       if (this.stateMachine.is(GameState.PLAYING)) this.stateMachine.transition(GameState.ROUND_END);
     });
@@ -440,6 +464,14 @@ export class GameScene {
     this.trainingOverlay = new TrainingOverlay();
     this.trainingOverlay.onBackToMenu = () => {
       this.exitTraining();
+    };
+
+    // 阶段 10 P1：战局回放面板 + 举报对话框（结算界面入口）
+    this.replayPanel = new ReplayPanel();
+    this.reportDialog = new ReportDialog();
+    this.reportDialog.onSubmitted = (report) => {
+      addReport(report);
+      this.hud?.addKillMessage(`已记录对「${report.targetName}」的举报`, this.simulationTimeMs);
     };
 
     this.settingsMenu.onApply = (settings: GameSettings) => {
@@ -588,6 +620,8 @@ export class GameScene {
 
     // 征服模式（必须在 setupSpawnPoints 之前初始化）
     this.conquestMode = new ConquestMode();
+    // 阶段 10 P1：战局回放录制器（训练场无对战回合，不录制）
+    this.replayRecorder = training ? null : new ReplayRecorder(this.simulationTimeMs);
     this.conquestMode.setPlayerTeam(TeamId.ALLIES); // 玩家默认苏军（蓝方）
     this.conquestMode.competitive = !training; // 训练场无对战，不判胜负/不流失兵力
     AIBot.playerTeam = TeamId.ALLIES; // 设置 AI 的玩家阵营
@@ -595,6 +629,10 @@ export class GameScene {
     this.conquestMode.onControlPointCaptured = (pointId, owner, name) => {
       const teamName = owner === TeamId.AXIS ? '德军' : '苏军';
       this.subtitleOverlay?.show(`「${name}」被${teamName}占领`, 3500);
+      // 阶段 10 P1：回放录制据点事件
+      this.replayRecorder?.record('objective', `「${name}」被${teamName}占领`, {
+        team: owner === TeamId.AXIS ? 'A' : 'B',
+      });
       // 阶段 10 P1：训练占点步骤完成
       if (training && owner === this.conquestMode.playerTeam) {
         this.handleTrainingProgress('capture');
@@ -855,6 +893,17 @@ export class GameScene {
     });
 
     this.inputManager.onVehicleToggle(() => {
+      // 阶段 10 P1：观战模式下 E 键切换跟随目标（死亡时无载具操作）
+      if (this.spectatorMode.active) {
+        this.spectatorMode.cycleTarget(this.aiSystem.bots);
+        const target = this.spectatorMode.getFollowTarget(this.aiSystem.bots);
+        const targetName = target ? `AI ${this.aiSystem.bots.indexOf(target) + 1}` : null;
+        this.hud?.addKillMessage(
+          targetName ? `观战跟随：${targetName}` : '观战自由飞行',
+          this.simulationTimeMs,
+        );
+        return;
+      }
       this.toggleVehicle();
     });
 
@@ -952,10 +1001,25 @@ export class GameScene {
       <div style="text-align: center; color: white;">
         <div id="round-winner" style="font-size: 52px; font-weight: bold; text-shadow: 2px 2px 8px rgba(0,0,0,0.9);"></div>
         <div id="round-timer" style="font-size: 24px; margin-top: 18px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);"></div>
+        <div id="round-actions" style="pointer-events: auto; display: flex; gap: 14px; justify-content: center; margin-top: 26px;">
+          <button id="round-replay" class="ui-btn ui-btn-ghost" style="padding: 10px 26px; font-size: 16px;">战局回放</button>
+          <button id="round-report" class="ui-btn ui-btn-ghost" style="padding: 10px 26px; font-size: 16px;">举报玩家</button>
+        </div>
       </div>
     `;
     document.body.appendChild(overlay);
     this.roundOverlay = overlay;
+
+    // 阶段 10 P1：结算入口——战局回放（仅本局有事件时显示）与举报玩家
+    const replayBtn = overlay.querySelector('#round-replay');
+    replayBtn?.addEventListener('click', () => {
+      if (this.replayRecorder && this.replayRecorder.getCount() > 0) {
+        this.replayPanel.show(this.replayRecorder.getTimeline());
+      }
+    });
+    overlay.querySelector('#round-report')?.addEventListener('click', () => {
+      this.openReportDialog();
+    });
   }
 
   private setupSpawnPoints(): void {
@@ -1207,12 +1271,26 @@ export class GameScene {
     }
   }
 
-  /** 结算遮罩（胜者文本 + 新回合倒计时） */
+  /** 结算遮罩（胜者文本 + 新回合倒计时 + 回放/举报入口） */
   private showRoundOverlay(winnerText: string): void {
     if (!this.roundOverlay) return;
     const winnerEl = this.roundOverlay.querySelector('#round-winner');
     if (winnerEl) winnerEl.textContent = winnerText;
+    // 阶段 10 P1：仅本局有事件时显示「战局回放」入口
+    const replayBtn = this.roundOverlay.querySelector('#round-replay') as HTMLElement | null;
+    if (replayBtn) {
+      replayBtn.style.display = this.replayRecorder && this.replayRecorder.getCount() > 0 ? 'inline-block' : 'none';
+    }
     this.roundOverlay.style.display = 'flex';
+  }
+
+  /** 阶段 10 P1：打开举报对话框（玩家列表来自计分板缓存） */
+  private openReportDialog(): void {
+    if (this.scoreboardPlayers.length === 0) {
+      this.hud?.addKillMessage('暂无其他玩家可举报', this.simulationTimeMs);
+      return;
+    }
+    this.reportDialog.show(this.scoreboardPlayers);
   }
 
   /** 阶段 10：连接失败后的可恢复操作——返回主菜单（断开网络 + 重置状态） */
@@ -1985,7 +2063,11 @@ export class GameScene {
           position,
           this.simulationTimeMs,
         );
-        if (result.killed) this.vehicleSystem.scheduleRespawn(vehicle);
+        if (result.killed) {
+          this.vehicleSystem.scheduleRespawn(vehicle);
+          // 阶段 10 P1：回放录制载具事件（爆炸 AoE 摧毁）
+          this.replayRecorder?.record('vehicle', `${vehicle.config.name} 被摧毁（爆炸）`);
+        }
       }
     }
 
@@ -2115,7 +2197,10 @@ export class GameScene {
       if (hitInfo.point) this.spawnImpact(hitInfo.point, hitInfo.normal || _direction || new THREE.Vector3());
       if (result.killed) {
         this.vehicleSystem.scheduleRespawn(hitVehicle);
-        this.hud.addKillMessage(`${hitVehicle.config.name} 被摧毁（${result.direction}部）`, currentTime);
+        const vehicleLabel = `${hitVehicle.config.name} 被摧毁（${result.direction}部）`;
+        this.hud.addKillMessage(vehicleLabel, currentTime);
+        // 阶段 10 P1：回放录制载具事件
+        this.replayRecorder?.record('vehicle', vehicleLabel, { detail: result.direction });
         this.spawnExplosionEffect(hitVehicle.mesh.position.clone());
         this.spawnSmokeEffect(hitVehicle.mesh.position.clone(), 6);
         if (this.currentVehicle?.vehicle === hitVehicle) {
@@ -2556,7 +2641,10 @@ export class GameScene {
           this.spawnImpact(closest, direction);
           if (result.killed) {
             this.vehicleSystem.scheduleRespawn(vehicle);
-            this.hud.addKillMessage(`敌方 ${vehicle.config.name} 被摧毁`, currentTime);
+            const vehicleLabel = `敌方 ${vehicle.config.name} 被摧毁`;
+            this.hud.addKillMessage(vehicleLabel, currentTime);
+            // 阶段 10 P1：回放录制载具事件（AI 反载具）
+            this.replayRecorder?.record('vehicle', vehicleLabel);
             this.spawnExplosionEffect(vehicle.mesh.position.clone());
             this.spawnSmokeEffect(vehicle.mesh.position.clone(), 6);
             if (this.currentVehicle?.vehicle === vehicle) {
@@ -2644,6 +2732,14 @@ export class GameScene {
     this.events.emit('ui:message', { text: '你被击杀了', time: currentTime });
     this.events.emit('player:death', { team: this.conquestMode.playerTeam, time: currentTime });
     if (this.deathOverlay) this.deathOverlay.style.display = 'flex';
+    // 阶段 10 P1：观战模式——阵亡等待重生期间可自由飞行 / 跟随 AI（单机；联网由服务端权威相机接管）
+    if (!this.networkGameClient && !this.isTraining) {
+      this.spectatorMode.activate();
+      this.events.emit('ui:message', {
+        text: '观战模式：WASD 自由飞行，按 E 切换跟随目标',
+        time: currentTime,
+      });
+    }
   }
 
   private handleRespawn(currentTime: number): void {
@@ -2657,6 +2753,9 @@ export class GameScene {
       return;
     }
     if (!this.player) return;
+
+    // 阶段 10 P1：重生时退出观战
+    this.spectatorMode.deactivate();
 
     this.healthSystem.respawn();
     const spawn = this.respawnSystem.getSpawnPoint(currentTime);
@@ -2710,6 +2809,11 @@ export class GameScene {
     }
 
     this.scoreboard.updatePlayers(players);
+
+    // 阶段 10 P1：缓存玩家列表供举报对话框使用（不含自己——举报对象为他人）
+    this.scoreboardPlayers = players
+      .filter((p) => p.id !== this.playerId)
+      .map((p) => ({ id: p.id, name: p.name, team: p.team }));
   }
 
   // ====== 阶段 6 接线：枪声分层 / 视觉基线 / 材质联动 / 特效池 / 冲击反馈 / 动态分辨率 ======
@@ -2855,6 +2959,18 @@ export class GameScene {
     if (this.player && !this.healthSystem.isDead && !this.inVehicle && !this.inNetworkVehicle && (!this.networkGameClient || this.networkAlive)) {
       this.player.update(this.inputManager.state, this.pendingMouseMovement, dt);
     }
+
+    // 阶段 10 P1：观战模式接管相机（玩家死亡时；用同一份鼠标增量与移动输入）
+    if (this.spectatorMode.active) {
+      this.spectatorMode.update(
+        dt,
+        this.camera,
+        this.inputManager.state,
+        this.pendingMouseMovement,
+        this.aiSystem.bots,
+      );
+    }
+
     this.pendingMouseMovement.x = 0;
     this.pendingMouseMovement.y = 0;
 
@@ -3174,6 +3290,9 @@ export class GameScene {
     this.firstRunWizard?.dispose();
     this.consentDialog?.dispose();
     this.trainingOverlay?.dispose();
+    this.replayPanel?.dispose();
+    this.reportDialog?.dispose();
+    this.spectatorMode.deactivate();
     this.crashReporter.deactivate();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
