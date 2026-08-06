@@ -204,6 +204,7 @@ export class HUD {
           </div>
         </div>
         <div id="health-text" style="font-size: 28px; font-weight: bold; min-width: 60px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);">100</div>
+        <div id="stance-indicator" style="font-size: 14px; font-weight: bold; color: #ddd; background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 4px; border-left: 3px solid #aaa; letter-spacing: 0.08em;">站立</div>
       </div>
 
       <div id="vehicle-health-container" style="position: absolute; bottom: 95px; left: 40px; opacity: 0; transition: opacity 0.2s;">
@@ -222,6 +223,10 @@ export class HUD {
           <div id="reload-progress" style="height: 100%; background: #ffcc00; width: 0%; transition: width 0.05s;"></div>
         </div>
         <div id="low-ammo" style="font-size: 14px; color: #ff6666; margin-top: 3px; opacity: 0; font-weight: bold;">弹药不足！按 R 换弹</div>
+      </div>
+
+      <div id="killstreak-banner" style="position: absolute; top: 32%; left: 50%; transform: translateX(-50%); opacity: 0; transition: opacity 0.15s; text-align: center; pointer-events: none;">
+        <div id="killstreak-label" style="font-size: 42px; font-weight: bold; color: #ffcc00; text-shadow: 0 0 20px rgba(255,200,0,0.7), 0 0 40px rgba(255,150,0,0.4); letter-spacing: 0.15em;"></div>
       </div>
 
       <div id="score-container" style="position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 5px;">
@@ -804,6 +809,28 @@ export class HUD {
     setTimeout(() => {
       el.style.opacity = '0';
     }, 800);
+  }
+
+  /** 阶段 10+ 扩展：连杀横幅（居中大字，金色光晕） */
+  showKillstreak(label: string): void {
+    const banner = this.container.querySelector('#killstreak-banner') as HTMLElement | null;
+    const labelEl = this.container.querySelector('#killstreak-label') as HTMLElement | null;
+    if (!banner || !labelEl) return;
+    labelEl.textContent = label;
+    banner.style.opacity = '1';
+    setTimeout(() => {
+      banner.style.opacity = '0';
+    }, 1500);
+  }
+
+  /** 阶段 10+ 扩展：左下角姿态指示（站/蹲/匍匐/冲刺/载具） */
+  setStance(stance: string): void {
+    const el = this.container.querySelector('#stance-indicator') as HTMLElement | null;
+    if (!el) return;
+    const STANCE_LABELS: Record<string, string> = { stand: '站立', crouch: '蹲伏', prone: '匍匐', sprint: '冲刺', vehicle: '载具' };
+    const STANCE_COLORS: Record<string, string> = { stand: '#aaa', crouch: '#88ccff', prone: '#88ff88', sprint: '#ffcc66', vehicle: '#ff8888' };
+    el.textContent = STANCE_LABELS[stance] ?? stance;
+    el.style.borderLeftColor = STANCE_COLORS[stance] ?? '#aaa';
   }
 
   /** 准星显隐（瞄具遮罩接管时隐藏） */

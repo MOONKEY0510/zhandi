@@ -95,6 +95,13 @@ export class MapManager {
     return this.currentMapId;
   }
 
+  /** 阶段 10+ 扩展：移动靶更新（仅训练场） */
+  updateTrainingTargets(time: number): void {
+    if (this.currentMap instanceof TrainingRange) {
+      this.currentMap.updateTargets(time);
+    }
+  }
+
   dispose(): void {
     if (this.builtDefinition) {
       this.scene.remove(this.builtDefinition.root);

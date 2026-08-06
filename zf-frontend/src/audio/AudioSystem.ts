@@ -11,6 +11,7 @@ export enum SoundType {
   HIT = 'hit',
   DEATH = 'death',
   KILL_CONFIRM = 'kill_confirm',
+  KILLSTREAK = 'killstreak',
   AMBIENT = 'ambient',
   UI_CLICK = 'ui_click',
   UI_HOVER = 'ui_hover',
@@ -151,6 +152,16 @@ export const SOUND_CONFIGS: Record<SoundType, SoundConfig> = {
     rolloffFactor: 0,
     category: 'sfx',
   },
+  [SoundType.KILLSTREAK]: {
+    type: SoundType.KILLSTREAK,
+    url: '/sounds/killstreak.mp3',
+    volume: 0.7,
+    loop: false,
+    spatial: false,
+    maxDistance: 0,
+    rolloffFactor: 0,
+    category: 'sfx',
+  },
   [SoundType.AMBIENT]: {
     type: SoundType.AMBIENT,
     url: '/sounds/ambient.mp3',
@@ -237,6 +248,8 @@ export class AudioSystem {
     this.sounds.set(SoundType.DEATH, this.createSweepTone(0.5, 400, 80, 0.7));
     // 击杀确认：短促双音上升
     this.sounds.set(SoundType.KILL_CONFIRM, this.createKillConfirm());
+    // 连杀：三连上升音
+    this.sounds.set(SoundType.KILLSTREAK, this.createKillstreak());
     // 环境音：低频持续噪声
     this.sounds.set(SoundType.AMBIENT, this.createAmbient());
     // UI 点击
@@ -333,6 +346,28 @@ export class AudioSystem {
       const freq1 = 400 + 400 * progress;
       const freq2 = 600 + 600 * progress;
       data[i] = (Math.sin(2 * Math.PI * freq1 * t) + Math.sin(2 * Math.PI * freq2 * t)) * envelope * 0.3;
+    }
+
+    return buffer;
+  }
+
+  /** 连杀提示：三连上升音（392→523→659Hz，每音 100ms，战地风格） */
+  private createKillstreak(): AudioBuffer {
+    const ctx = this.audioContext!;
+    const duration = 0.32;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(1, length, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    const notes = [392, 523.25, 659.25];
+    const noteLen = length / notes.length;
+    for (let i = 0; i < length; i++) {
+      const noteIdx = Math.min(notes.length - 1, Math.floor(i / noteLen));
+      const t = i / sampleRate;
+      const local = (i % noteLen) / noteLen;
+      const envelope = Math.sin(Math.PI * local);
+      data[i] = Math.sin(2 * Math.PI * notes[noteIdx] * t) * envelope * 0.35;
     }
 
     return buffer;

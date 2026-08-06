@@ -213,6 +213,10 @@ export class GameScene {
   /** 阶段 10+ 新特性：呼叫炮击冷却 */
   private artilleryCooldownUntil = 0;
   private lastSquadStatusUpdate = 0;
+  /** 阶段 10+ 扩展：连杀计数（死亡清零） */
+  private killstreakCount = 0;
+  /** 阶段 10+ 扩展：上一次姿态（去重） */
+  private lastStance = '';
   private readonly ARTILLERY_COOLDOWN = 45_000;
   private readonly ARTILLERY_RADIUS = 8;
   private readonly ARTILLERY_DAMAGE = 90;
@@ -458,6 +462,18 @@ export class GameScene {
       // 阶段 10+ 扩展：击杀确认（HUD 图标 + 音效）
       this.hud.showKillConfirm();
       this.audioSystem.play(SoundType.KILL_CONFIRM);
+      // 阶段 10+ 扩展：连杀奖励
+      this.killstreakCount++;
+      if (this.killstreakCount === 3) {
+        this.hud.showKillstreak('三连杀！');
+        this.audioSystem.play(SoundType.KILLSTREAK);
+      } else if (this.killstreakCount === 5) {
+        this.hud.showKillstreak('五连杀！');
+        this.audioSystem.play(SoundType.KILLSTREAK);
+      } else if (this.killstreakCount === 8) {
+        this.hud.showKillstreak('神射手！');
+        this.audioSystem.play(SoundType.KILLSTREAK);
+      }
       // 阶段 10 P1：回放录制击杀事件
       this.replayRecorder?.record('kill', label, {
         team: victimTeam === TeamId.AXIS ? 'A' : 'B',
@@ -466,6 +482,7 @@ export class GameScene {
     });
     this.events.on('player:death', ({ team }) => {
       this.deathCount++;
+      this.killstreakCount = 0;
       this.conquestMode?.onPlayerDeath(team);
       // 阶段 10 P1：回放录制阵亡事件
       this.replayRecorder?.record('death', '你被击杀了', { team: team === TeamId.AXIS ? 'A' : 'B' });
@@ -1522,6 +1539,24 @@ export class GameScene {
       text: '训练完成，干得漂亮！',
       time: this.simulationTimeMs,
     });
+  }
+
+  /** 阶段 10+ 扩展：姿态 HUD——去重，仅变化时更新 DOM */
+  private updateStanceHUD(): void {
+    if (this.healthSystem.isDead) {
+      if (this.lastStance !== '') { this.hud.setStance(''); this.lastStance = ''; }
+      return;
+    }
+    if (this.inVehicle || this.inNetworkVehicle) {
+      if (this.lastStance !== 'vehicle') { this.hud.setStance('vehicle'); this.lastStance = 'vehicle'; }
+      return;
+    }
+    let stance: string;
+    if (this.player?.isProneActive()) stance = 'prone';
+    else if (this.player?.isCrouchActive()) stance = 'crouch';
+    else if (this.inputManager.state.sprint) stance = 'sprint';
+    else stance = 'stand';
+    if (stance !== this.lastStance) { this.hud.setStance(stance); this.lastStance = stance; }
   }
 
   /** 训练返回主菜单：干净重开页面，避免世界对象残留（菜单/设置/档案均已持久化） */
@@ -3441,6 +3476,9 @@ export class GameScene {
       this.hud.setSquadStatus(alive, total);
     }
 
+    // 阶段 10+ 扩展：姿态 HUD（去重，仅变化时更新）
+    this.updateStanceHUD();
+
     // 小队标记环旋转 + 过期（阶段 10+ 新特性）
     this.updateSquadMarker(time);
     // 呼叫炮击弹幕（阶段 10+ 新特性）
@@ -3449,6 +3487,8 @@ export class GameScene {
     // 新手训练场（阶段 10 P1）：位置类步骤检测（移动标记点/机动障碍区）
     if (this.trainingMode) {
       this.updateTrainingProximity();
+      // 阶段 10+ 扩展：移动靶更新（训练场）
+      this.mapManager.updateTrainingTargets?.(time);
     }
 
     // 联网权威回写：本地渲染位置向服务端预测轨迹平滑收敛

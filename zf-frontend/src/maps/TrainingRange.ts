@@ -26,6 +26,8 @@ export class TrainingRange {
   obstacles: THREE.Mesh[] = [];
   collisionObjects: THREE.Object3D[] = [];
   private markers: THREE.Mesh[] = [];
+  /** 阶段 10+ 扩展：移动靶数据（靶子 + 靶架） */
+  private movingTargets: { board: THREE.Mesh; stand: THREE.Mesh; baseX: number; baseZ: number; amplitude: number; speed: number; phase: number }[] = [];
   private disposables: { geometry: THREE.BufferGeometry; material: THREE.Material }[] = [];
 
   constructor(scene: THREE.Scene) {
@@ -54,12 +56,13 @@ export class TrainingRange {
     this.disposables.push({ geometry, material });
   }
 
-  /** 靶子排：5 个木色靶板，面向玩家出生方向（z+），命中判定走 userData 标记 */
+  /** 靶子排：5 个木色靶板，面向玩家出生方向（z+）。x=-4,4 为移动靶，其余静态。 */
   private createTargets(): void {
+    const MOVING_XS = new Set([-4, 4]);
     for (const x of TARGET_XS) {
       const boardGeo = new THREE.BoxGeometry(1.2, 1.8, 0.15);
       const boardMat = new THREE.MeshStandardMaterial({
-        color: 0xd8c9a3,
+        color: MOVING_XS.has(x) ? 0xd8a050 : 0xd8c9a3,
         roughness: 0.7,
         metalness: 0.1,
       });
@@ -80,6 +83,24 @@ export class TrainingRange {
       this.scene.add(stand);
       this.collisionObjects.push(stand);
       this.disposables.push({ geometry: standGeo, material: standMat });
+
+      // 阶段 10+ 扩展：移动靶（x=-4,4 沿 X 轴摆动 ±3m）
+      if (MOVING_XS.has(x)) {
+        this.movingTargets.push({
+          board, stand,
+          baseX: x, baseZ: TRAINING_LAYOUT.targetRowZ,
+          amplitude: 3, speed: 0.8, phase: x > 0 ? 0 : Math.PI,
+        });
+      }
+    }
+  }
+
+  /** 阶段 10+ 扩展：更新移动靶位置（由 GameScene 每帧调用） */
+  updateTargets(time: number): void {
+    for (const mt of this.movingTargets) {
+      const offset = Math.sin(time * mt.speed + mt.phase) * mt.amplitude;
+      mt.board.position.x = mt.baseX + offset;
+      mt.stand.position.x = mt.baseX + offset;
     }
   }
 
