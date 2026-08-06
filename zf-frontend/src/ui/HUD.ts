@@ -85,6 +85,7 @@ export class HUD {
     vehicleHealthName: HTMLElement | null;
     suppressionOverlay: HTMLElement | null;
     suppressionBlur: HTMLElement | null;
+    scopeOverlay: HTMLElement | null;
   } = {
     healthBar: null,
     healthText: null,
@@ -117,6 +118,7 @@ export class HUD {
     vehicleHealthName: null,
     suppressionOverlay: null,
     suppressionBlur: null,
+    scopeOverlay: null,
   };
 
   killMessages: { text: string; time: number }[] = [];
@@ -269,6 +271,13 @@ export class HUD {
         <div id="suppression-vignette" style="width: 100%; height: 100%; background: radial-gradient(ellipse at center, transparent 30%, rgba(20,20,20,0.65) 85%);"></div>
         <div id="suppression-blur" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); transition: backdrop-filter 0.3s, -webkit-backdrop-filter 0.3s;"></div>
       </div>
+
+      <div id="scope-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.15s; pointer-events: none; display: none;">
+        <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle at center, transparent 26%, rgba(0,0,0,0.97) 34%);"></div>
+        <div style="position: absolute; top: 50%; left: 0; width: 100%; height: 1px; background: rgba(0,0,0,0.9); transform: translateY(-50%);"></div>
+        <div style="position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: rgba(0,0,0,0.9); transform: translateX(-50%);"></div>
+        <div style="position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: transparent; border: 1.5px solid rgba(255,255,255,0.85); border-radius: 50%; transform: translate(-50%, -50%);"></div>
+      </div>
     `;
 
     document.body.appendChild(container);
@@ -285,6 +294,7 @@ export class HUD {
     this.elements.damageVignette = container.querySelector('#damage-vignette');
     this.elements.suppressionOverlay = container.querySelector('#suppression-overlay') as HTMLElement;
     this.elements.suppressionBlur = container.querySelector('#suppression-blur') as HTMLElement;
+    this.elements.scopeOverlay = container.querySelector('#scope-overlay') as HTMLElement;
     this.elements.staminaBar = container.querySelector('#stamina-bar');
     this.elements.equipmentText = container.querySelector('#equipment-text');
     this.elements.interactionPrompt = container.querySelector('#interaction-prompt');
@@ -762,6 +772,20 @@ export class HUD {
     }
     // 压制时准星扩散加大
     this.crosshairSpread = Math.max(this.crosshairSpread, clamped * 20);
+  }
+
+  /** 瞄具遮罩：开镜时显示（圆形视野 + 十字线），同时隐藏普通准星 */
+  setScoped(scoped: boolean): void {
+    if (this.elements.scopeOverlay) {
+      this.elements.scopeOverlay.style.display = scoped ? 'block' : 'none';
+      this.elements.scopeOverlay.style.opacity = scoped ? '1' : '0';
+    }
+    this.setCrosshairVisible(!scoped);
+  }
+
+  /** 准星显隐（瞄具遮罩接管时隐藏） */
+  private setCrosshairVisible(visible: boolean): void {
+    if (this.elements.crosshair) this.elements.crosshair.style.opacity = visible ? '1' : '0';
   }
 
   dispose(): void {

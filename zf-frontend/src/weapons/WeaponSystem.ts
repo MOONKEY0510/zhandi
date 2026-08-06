@@ -48,6 +48,8 @@ export interface WeaponConfig {
   movingSpreadMultiplier: number;
   crouchSpreadMultiplier: number;
   boltActionTime?: number;
+  /** 瞄具目标 FOV（有值 = 支持光学瞄具，B 键切换；越小放大越强） */
+  sightFov?: number;
 }
 
 export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
@@ -70,6 +72,7 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     firstShotRecoilMultiplier: 1.35,
     movingSpreadMultiplier: 1.8,
     crouchSpreadMultiplier: 0.75,
+    sightFov: 42,
   },
   [WeaponType.SMG]: {
     name: 'Suomi KP/-31',
@@ -110,6 +113,7 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     firstShotRecoilMultiplier: 1.45,
     movingSpreadMultiplier: 2.2,
     crouchSpreadMultiplier: 0.65,
+    sightFov: 42,
   },
   [WeaponType.BOLT_RIFLE]: {
     name: 'Kar98k',
@@ -131,6 +135,7 @@ export const WEAPON_CONFIGS: Record<WeaponType, WeaponConfig> = {
     movingSpreadMultiplier: 3,
     crouchSpreadMultiplier: 0.6,
     boltActionTime: 0.8,
+    sightFov: 26,
   },
   [WeaponType.PISTOL]: {
     name: 'P08 鲁格',

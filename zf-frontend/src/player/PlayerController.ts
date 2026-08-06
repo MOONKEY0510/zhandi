@@ -38,6 +38,14 @@ const SPRINT_FOV = PLAYER_CONFIG.sprintFov;
 const ADS_FOV = PLAYER_CONFIG.adsFov;
 const FOV_LERP_SPEED = PLAYER_CONFIG.fovLerpSpeed;
 
+// 侧身（阶段 10+：新特性——Q/E 探头）
+const LEAN_OFFSET = 0.35; // 相机横向偏移（米）
+const LEAN_TILT = 0.1; // 相机侧倾（弧度 ≈ 5.7°）
+const LEAN_LERP_SPEED = 12;
+
+// 瞄具（阶段 10+：新特性——B 切换光学瞄具）
+const SCOPE_SENSITIVITY_MULTIPLIER = 0.45; // 瞄具内鼠标灵敏度进一步降低
+
 export class PlayerController {
   private physicsWorld: PhysicsWorld;
   private bodyId: string;
@@ -74,6 +82,8 @@ export class PlayerController {
   private currentFov = BASE_FOV;
   private targetFov = BASE_FOV;
   private isAiming = false;
+  /** 瞄具激活时的目标 FOV（null = 未开启瞄具） */
+  private scopedFov: number | null = null;
   private settings: Pick<GameSettings, 'sensitivity' | 'adsSensitivityMultiplier' | 'fov' | 'invertY'> = {
     sensitivity: DEFAULT_GAME_SETTINGS.sensitivity,
     adsSensitivityMultiplier: DEFAULT_GAME_SETTINGS.adsSensitivityMultiplier,
@@ -84,6 +94,9 @@ export class PlayerController {
   // 相机后坐力
   private cameraRecoilPitch = 0;
   private cameraRecoilYaw = 0;
+
+  // 侧身
+  private leanAmount = 0;
 
   constructor(physicsWorld: PhysicsWorld, camera: THREE.PerspectiveCamera) {
     this.physicsWorld = physicsWorld;
@@ -107,6 +120,7 @@ export class PlayerController {
     this.updateStamina(input, dt);
     this.updateCrouch(input, dt);
     this.updateProne(input, dt);
+    this.updateLean(input, dt);
     this.updateBob(input, dt);
     this.updateFov(dt);
     this.updateCameraRecoil(dt);
@@ -115,7 +129,10 @@ export class PlayerController {
 
   private updateRotation(mouseMovement: { x: number; y: number }): void {
     const sensitivity = MOUSE_SENSITIVITY * (this.settings.sensitivity / 50);
-    const aimingMultiplier = this.isAiming ? this.settings.adsSensitivityMultiplier : 1;
+    const scoped = this.isAiming && this.scopedFov !== null;
+    const aimingMultiplier = this.isAiming
+      ? scoped ? SCOPE_SENSITIVITY_MULTIPLIER : this.settings.adsSensitivityMultiplier
+      : 1;
     const invertY = this.settings.invertY ? -1 : 1;
     this.yaw -= mouseMovement.x * sensitivity * aimingMultiplier;
     this.pitch -= mouseMovement.y * sensitivity * aimingMultiplier * invertY;
@@ -242,6 +259,12 @@ export class PlayerController {
     if (!input.prone) this.wasPronePressed = false;
   }
 
+  /** 侧身：Q/E 按住探头，相机横向偏移 + 侧倾（纯视角，不改变碰撞体） */
+  private updateLean(input: InputState, dt: number): void {
+    const target = (input.leanLeft ? -1 : 0) + (input.leanRight ? 1 : 0);
+    this.leanAmount += (target - this.leanAmount) * Math.min(1, LEAN_LERP_SPEED * dt);
+  }
+
   private updateBob(input: InputState, dt: number): void {
     const isMoving = input.forward || input.backward || input.left || input.right;
     const speedFactor = this.isSprinting ? 1.5 : this.isProne ? 0.3 : this.isCrouching ? 0.5 : 1.0;
@@ -255,8 +278,10 @@ export class PlayerController {
   }
 
   private updateFov(dt: number): void {
-    // ADS 优先级最高，其次是冲刺
-    if (this.isAiming) {
+    // 瞄具 > ADS > 冲刺（优先级从高到低）
+    if (this.isAiming && this.scopedFov !== null) {
+      this.targetFov = this.scopedFov;
+    } else if (this.isAiming) {
       this.targetFov = ADS_FOV;
     } else if (this.isSprinting) {
       this.targetFov = SPRINT_FOV;
@@ -271,6 +296,12 @@ export class PlayerController {
   // 设置瞄准状态（由 GameScene 调用）
   setAiming(aiming: boolean): void {
     this.isAiming = aiming;
+  }
+
+  /** 设置瞄具（fov = 瞄具放大后的目标 FOV；null = 关闭瞄具） */
+  setScoped(fov: number | null): void {
+    this.scopedFov = fov;
+    if (fov === null) this.targetFov = BASE_FOV;
   }
 
   applySettings(settings: GameSettings): void {
@@ -314,6 +345,14 @@ export class PlayerController {
       camZ += bobX * Math.sin(this.yaw) + bobY * Math.cos(this.yaw) * 0.3;
     }
 
+    // 侧身偏移：沿右向量横向移动，配合侧倾
+    if (this.leanAmount !== 0) {
+      const rightX = Math.cos(this.yaw);
+      const rightZ = -Math.sin(this.yaw);
+      camX += rightX * this.leanAmount * LEAN_OFFSET;
+      camZ += rightZ * this.leanAmount * LEAN_OFFSET;
+    }
+
     // 屏幕震动
     if (this.shakeAmount > 0) {
       camX += (Math.random() - 0.5) * this.shakeAmount;
@@ -326,6 +365,7 @@ export class PlayerController {
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw + this.cameraRecoilYaw;
     this.camera.rotation.x = this.pitch + this.cameraRecoilPitch;
+    this.camera.rotation.z = -this.leanAmount * LEAN_TILT;
   }
 
   // 触发屏幕震动（阶段 10：reduceScreenShake 时幅度乘 0.3）
@@ -345,6 +385,8 @@ export class PlayerController {
     this.cameraRecoilYaw = 0;
     this.isProne = false;
     this.wasPronePressed = false;
+    this.leanAmount = 0;
+    this.scopedFov = null;
   }
 
   // 坠落伤害回调
@@ -383,5 +425,9 @@ export class PlayerController {
 
   isProneActive(): boolean {
     return this.isProne;
+  }
+
+  getLeanAmount(): number {
+    return this.leanAmount;
   }
 }

@@ -9,6 +9,8 @@ export interface InputState {
   sprint: boolean;
   crouch: boolean;
   prone: boolean;
+  leanLeft: boolean;
+  leanRight: boolean;
   fire: boolean;
   aim: boolean;
   reload: boolean;
@@ -24,6 +26,7 @@ export type ScoreboardCallback = (visible: boolean) => void;
 export type EscapeCallback = () => void;
 export type WeatherToggleCallback = () => void;
 export type MeleeCallback = () => void;
+export type ScopeCallback = () => void;
 
 export class InputManager {
   private keys: Set<string> = new Set();
@@ -41,10 +44,12 @@ export class InputManager {
   private escapeCallbacks: EscapeCallback[] = [];
   private weatherToggleCallbacks: WeatherToggleCallback[] = [];
   private meleeCallbacks: MeleeCallback[] = [];
+  private scopeCallbacks: ScopeCallback[] = [];
 
   public state: InputState = {
     forward: false, backward: false, left: false, right: false,
     jump: false, sprint: false, crouch: false, prone: false,
+    leanLeft: false, leanRight: false,
     fire: false, aim: false, reload: false,
   };
 
@@ -108,6 +113,10 @@ export class InputManager {
     // 近战 V
     if (actions.includes('melee') && !this.keys.has(e.code)) {
       this.meleeCallbacks.forEach(cb => cb());
+    }
+    // 切换瞄具 B
+    if (actions.includes('scope') && !this.keys.has(e.code)) {
+      this.scopeCallbacks.forEach(cb => cb());
     }
     // Esc 设置
     if (actions.includes('escape')) {
@@ -180,6 +189,8 @@ export class InputManager {
     this.state.sprint = this.keys.has(b.sprint) || this.keys.has('ShiftRight');
     this.state.crouch = this.keys.has(b.crouch) || this.keys.has('ControlRight');
     this.state.prone = this.keys.has(b.prone);
+    this.state.leanLeft = this.keys.has(b.lean_left);
+    this.state.leanRight = this.keys.has(b.lean_right);
     this.state.reload = this.keys.has(b.reload);
   }
 
@@ -215,6 +226,8 @@ export class InputManager {
   onWeatherToggle(cb: WeatherToggleCallback): void { this.weatherToggleCallbacks.push(cb); }
 
   onMelee(cb: MeleeCallback): void { this.meleeCallbacks.push(cb); }
+
+  onScope(cb: ScopeCallback): void { this.scopeCallbacks.push(cb); }
 
   private notifyWeaponSwitch(slot: number): void {
     this.weaponSwitchCallbacks.forEach(cb => cb(slot));

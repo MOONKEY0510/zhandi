@@ -20,6 +20,9 @@ export type KeyActionId =
   | 'prone'
   | 'grenade'
   | 'melee'
+  | 'lean_left'
+  | 'lean_right'
+  | 'scope'
   | 'vehicle'
   | 'seat'
   | 'weather'
@@ -42,11 +45,14 @@ export const DEFAULT_KEY_BINDINGS: Readonly<KeyBindings> = {
   weapon_3: 'Digit3',
   weapon_4: 'Digit4',
   weapon_5: 'Digit5',
-  equipment: 'KeyQ',
+  equipment: 'KeyC',
   prone: 'KeyZ',
   grenade: 'KeyG',
   melee: 'KeyV',
-  vehicle: 'KeyE',
+  lean_left: 'KeyQ',
+  lean_right: 'KeyE',
+  scope: 'KeyB',
+  vehicle: 'KeyX',
   seat: 'KeyF',
   weather: 'KeyT',
   scoreboard: 'Tab',
@@ -72,6 +78,9 @@ export const KEY_ACTION_LABELS: Readonly<Record<KeyActionId, string>> = {
   prone: '匍匐',
   grenade: '投掷物',
   melee: '近战',
+  lean_left: '左侧身',
+  lean_right: '右侧身',
+  scope: '切换瞄具',
   vehicle: '进入/离开载具',
   seat: '切换座位',
   weather: '切换天气',

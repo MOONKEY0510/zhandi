@@ -234,6 +234,9 @@ export class GameScene {
   // 阶段 10+：近战攻击冷却（500ms）
   private meleeCooldown = 0;
 
+  // 阶段 10+：瞄具状态（B 键切换光学瞄具）
+  private isScoped = false;
+
   // 战术装备
   private equipmentSystem!: EquipmentSystem;
   /** 反坦克地雷（阶段 7 P1） */
@@ -873,6 +876,8 @@ export class GameScene {
 
   private setupInputCallbacks(): void {
     this.inputManager.onWeaponSwitch((slot) => {
+      // 换枪时收起瞄具
+      this.setScopeOff();
       const allowedWeapons = this.selectedClass ? [this.selectedClass.primaryWeapon] : WEAPON_ORDER;
       if (slot < allowedWeapons.length) {
         this.weaponSystem.switchWeapon(allowedWeapons[slot]);
@@ -956,6 +961,10 @@ export class GameScene {
 
     this.inputManager.onMelee(() => {
       this.handleMelee();
+    });
+
+    this.inputManager.onScope(() => {
+      this.toggleScope();
     });
   }
 
@@ -1784,6 +1793,38 @@ export class GameScene {
       node = node.parent;
     }
     return false;
+  }
+
+  /** 收起瞄具（换枪/重生/阵亡时调用） */
+  private setScopeOff(): void {
+    if (!this.isScoped) return;
+    this.isScoped = false;
+    this.applyScopeState();
+  }
+
+  /** 切换瞄具：B 键。仅当前武器支持（sightFov 有值）时生效；死亡/载具内禁用 */
+  private toggleScope(): void {
+    if (this.healthSystem.isDead) return;
+    if (this.inVehicle || this.inNetworkVehicle) return;
+    const config = this.weaponSystem.getCurrentWeapon().config;
+    if (config.sightFov === undefined) {
+      this.audioSystem.play(SoundType.UI_CLICK);
+      this.hud.addKillMessage('当前武器无瞄具', this.simulationTimeMs);
+      return;
+    }
+    this.isScoped = !this.isScoped;
+    this.applyScopeState();
+    this.audioSystem.play(SoundType.UI_CLICK);
+    this.hud.addKillMessage(this.isScoped ? `已装镜（${config.name}）` : '收起瞄具', this.simulationTimeMs);
+  }
+
+  /** 同步瞄具状态到 PlayerController / WeaponView / HUD */
+  private applyScopeState(): void {
+    const config = this.weaponSystem.getCurrentWeapon().config;
+    const scoped = this.isScoped && config.sightFov !== undefined;
+    this.player?.setScoped(scoped ? config.sightFov! : null);
+    this.weaponView.setScoped(scoped);
+    this.hud.setScoped(scoped);
   }
 
   /** 放置反坦克地雷：上限由 MineSystem 按队伍控制 */
@@ -2846,7 +2887,7 @@ export class GameScene {
       } else {
         this.spectatorMode.activate();
         this.events.emit('ui:message', {
-          text: '观战模式：WASD 自由飞行，按 E 切换跟随目标',
+          text: '观战模式：WASD 自由飞行，按 X 切换跟随目标',
           time: currentTime,
         });
       }

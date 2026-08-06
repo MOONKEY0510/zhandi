@@ -21,6 +21,9 @@ export class WeaponView {
   private isAiming = false;
   private adsProgress = 0;
 
+  // 瞄具（阶段 10+：新特性——开镜时隐藏武器模型，露出瞄具视野）
+  private isScoped = false;
+
   // 切枪动画
   private switchProgress = 1;
   private isSwitching = false;
@@ -128,8 +131,17 @@ export class WeaponView {
     this.isAiming = aiming;
   }
 
+  /** 瞄具：开镜时隐藏第一人称武器模型（避免挡住放大视野） */
+  setScoped(scoped: boolean): void {
+    this.isScoped = scoped;
+    if (this.weaponMesh) this.weaponMesh.visible = !scoped;
+  }
+
   update(_deltaTime: number, isMoving: boolean, isFiring: boolean, dt: number): void {
     if (!this.weaponMesh) return;
+
+    // 瞄具隐藏优先（不受切枪动画覆盖）
+    this.weaponMesh.visible = !this.isScoped;
 
     // 切枪动画
     if (this.isSwitching) {
