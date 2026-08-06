@@ -233,6 +233,11 @@ export class Weapon {
     return timeSinceLastFire >= 1 / this.config.fireRate;
   }
 
+  /** 阶段 10+ 扩展：补给站补弹——把备用弹药补满（含弹匣内已有子弹） */
+  replenishReserveAmmo(): void {
+    this.reserveAmmo = DEFAULT_GAME_CONFIG.combat.startingReserveAmmo;
+  }
+
   fire(currentTime: number): boolean {
     if (!this.canFire(currentTime)) {
       if (this.currentAmmo <= 0) this.emitAction('dry_fire', currentTime);
@@ -319,6 +324,11 @@ export class WeaponSystem {
 
   getCurrentWeapon(): Weapon {
     return this.weapons.get(this.currentWeaponType)!;
+  }
+
+  /** 全部已持有武器（补给站补弹用） */
+  getWeapons(): Weapon[] {
+    return [...this.weapons.values()];
   }
 
   /** 当前主武器弹尽时自动切副武器（手枪），换弹后恢复 */

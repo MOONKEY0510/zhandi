@@ -232,11 +232,12 @@ export class Vehicle {
       [VehicleDamagePart.ENGINE]: this.createPart(PART_HEALTH_FACTORS[VehicleDamagePart.ENGINE]),
     };
 
-    // 座位槽：司机 + 乘客
+    // 座位槽：司机 + 乘客（武器装载载具的第二座位为炮手）
     this.seats = Array.from({ length: Math.max(1, this.config.seats) }, () => null);
     this.seatLabels = ['驾驶员'];
     for (let i = 1; i < this.seats.length; i++) {
-      this.seatLabels.push(`座位${i}`);
+      // 阶段 10+ 扩展：武器装载载具（坦克/吉普）第二座位命名炮手
+      this.seatLabels.push(this.config.weaponMount && i === 1 ? '炮手' : `乘员${i}`);
     }
 
     this.mesh = this.createVehicleMesh();

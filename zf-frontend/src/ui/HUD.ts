@@ -286,9 +286,23 @@ export class HUD {
 
       <div id="scope-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.15s; pointer-events: none; display: none;">
         <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle at center, transparent 26%, rgba(0,0,0,0.97) 34%);"></div>
-        <div style="position: absolute; top: 50%; left: 0; width: 100%; height: 1px; background: rgba(0,0,0,0.9); transform: translateY(-50%);"></div>
-        <div style="position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: rgba(0,0,0,0.9); transform: translateX(-50%);"></div>
-        <div style="position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: transparent; border: 1.5px solid rgba(255,255,255,0.85); border-radius: 50%; transform: translate(-50%, -50%);"></div>
+        <svg width="200" height="200" viewBox="0 0 200 200" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.9;">
+          <!-- 主十字线（细黑，保证在亮背景可见） -->
+          <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(0,0,0,0.85)" stroke-width="1.5"/>
+          <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(0,0,0,0.85)" stroke-width="1.5"/>
+          <!-- 中央细十字（白，突出瞄准点） -->
+          <line x1="100" y1="94" x2="100" y2="106" stroke="rgba(255,255,255,0.9)" stroke-width="1"/>
+          <line x1="94" y1="100" x2="106" y2="100" stroke="rgba(255,255,255,0.9)" stroke-width="1"/>
+          <!-- mil-dot 刻度点（每 12 单位一个，水平 + 垂直） -->
+          <g fill="rgba(255,255,255,0.75)">
+            <circle cx="88" cy="100" r="2"/><circle cx="76" cy="100" r="2"/><circle cx="64" cy="100" r="2"/><circle cx="52" cy="100" r="2"/><circle cx="40" cy="100" r="2"/>
+            <circle cx="112" cy="100" r="2"/><circle cx="124" cy="100" r="2"/><circle cx="136" cy="100" r="2"/><circle cx="148" cy="100" r="2"/><circle cx="160" cy="100" r="2"/>
+            <circle cx="100" cy="88" r="2"/><circle cx="100" cy="76" r="2"/><circle cx="100" cy="64" r="2"/><circle cx="100" cy="52" r="2"/><circle cx="100" cy="40" r="2"/>
+            <circle cx="100" cy="112" r="2"/><circle cx="100" cy="124" r="2"/><circle cx="100" cy="136" r="2"/><circle cx="100" cy="148" r="2"/><circle cx="100" cy="160" r="2"/>
+          </g>
+          <!-- 底部测距线（坦克测距分划） -->
+          <path d="M 100 168 L 96 156 M 100 168 L 104 156" stroke="rgba(255,255,255,0.6)" stroke-width="1.5"/>
+        </svg>
       </div>
     `;
 

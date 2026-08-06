@@ -217,6 +217,9 @@ export class GameScene {
   private killstreakCount = 0;
   /** 阶段 10+ 扩展：上一次姿态（去重） */
   private lastStance = '';
+  /** 阶段 10+ 扩展：步兵补给站补弹状态 */
+  private lastPlayerSupplyMessage = false;
+  private lastPlayerSupplyTime = 0;
   private readonly ARTILLERY_COOLDOWN = 45_000;
   private readonly ARTILLERY_RADIUS = 8;
   private readonly ARTILLERY_DAMAGE = 90;
@@ -899,9 +902,11 @@ export class GameScene {
     const spawnPositions = [
       new THREE.Vector3(15, 1, 15),
       new THREE.Vector3(-15, 1, -15),
+      new THREE.Vector3(0, 1, -30),
     ];
     const vehicleCount = Math.min(this.config.benchmark.vehicleCount, spawnPositions.length);
-    const vehicleTypes = [VehicleType.JEEP, VehicleType.TANK];
+    // 阶段 10+ 扩展：摩托车入局（机动侦察，无武器）
+    const vehicleTypes = [VehicleType.JEEP, VehicleType.TANK, VehicleType.MOTORCYCLE];
 
     for (let index = 0; index < vehicleCount; index++) {
       // 阵营分配：偶数索引 → 玩家方（苏军），奇数索引 → 德军（AI 反载具闭环需要分阵营）
@@ -1766,6 +1771,14 @@ export class GameScene {
         const scale = 1 + progress * 8;
         obj.scale.set(scale, scale, scale);
         (obj.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - progress);
+      } else if (obj.userData.type === 'lingeringSmoke' && obj instanceof THREE.Mesh) {
+        // 阶段 10+ 扩展：残留烟柱——上升 + 膨胀 + 淡出
+        const rise = obj.userData.riseSpeed as number;
+        const startScale = obj.userData.startScale as number;
+        obj.position.y += rise * dt;
+        const scale = startScale + progress * 6;
+        obj.scale.set(scale, scale * 1.4, scale);
+        (obj.material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - progress);
       } else if (obj instanceof THREE.Points) {
         // 碎片粒子
         const velocities = obj.userData.velocities as THREE.Vector3[];
@@ -1825,6 +1838,40 @@ export class GameScene {
     points.userData.type = 'smoke';
     this.scene.add(points);
     this.explosionEffects.push(points);
+  }
+
+  /** 阶段 10+ 扩展：爆炸残留烟柱——3 团深色烟雾自爆炸点缓缓升起，营造战场硝烟 */
+  private spawnLingeringSmoke(position: THREE.Vector3, radius: number): void {
+    const handle = this.vfxPool.spawn(
+      {
+        type: VfxType.SMOKE,
+        position: { x: position.x, y: position.y, z: position.z },
+        importance: 'low',
+        durationMs: 3000,
+      },
+      this.simulationTimeMs,
+    );
+    if (!handle) return;
+
+    for (let i = 0; i < 3; i++) {
+      const geo = new THREE.SphereGeometry(0.4, 6, 6);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x3a3a3a, transparent: true, opacity: 0.55, depthWrite: false,
+      });
+      const puff = new THREE.Mesh(geo, mat);
+      puff.position.set(
+        position.x + (gameplayRandom() - 0.5) * radius * 0.5,
+        position.y + 0.6 + i * 0.4,
+        position.z + (gameplayRandom() - 0.5) * radius * 0.5,
+      );
+      puff.userData.life = 0;
+      puff.userData.maxLife = 3;
+      puff.userData.type = 'lingeringSmoke';
+      puff.userData.riseSpeed = 1.2 + i * 0.5;
+      puff.userData.startScale = 0.5 + i * 0.3;
+      this.scene.add(puff);
+      this.explosionEffects.push(puff);
+    }
   }
 
   // ====== 伤害数字 ======
@@ -2235,7 +2282,12 @@ export class GameScene {
 
     if (this.currentVehicle.isDriver) {
       vehicle.drive(forward, turn, dt);
+    }
 
+    // 阶段 10+ 扩展：坦克乘员位——炮手位（座位 1）可独立瞄准 + 开炮（不驾驶）
+    const seatIndex = vehicle.getSeatIndexOf(this.playerId);
+    const isGunner = this.currentVehicle.vehicle.config.weaponMount && seatIndex === 1;
+    if (this.currentVehicle.isDriver || isGunner) {
       // 炮塔朝向准星方向（相机 yaw），主炮联动
       vehicle.setTurretTargetYaw(this.camera.rotation.y);
 
@@ -2257,6 +2309,37 @@ export class GameScene {
       this.hud.addKillMessage('进入补给站：维修 + 弹药补充中', this.simulationTimeMs);
     }
     this.lastSupplyZoneMessage = inSupply;
+  }
+
+  /** 阶段 10+ 扩展：步兵补给站弹药拾取——玩家不在载具且位于同阵营补给区时自动补弹 */
+  private updatePlayerSupplyPickup(): void {
+    if (this.healthSystem.isDead || this.inVehicle || this.inNetworkVehicle) return;
+    if (!this.player) return;
+    const pos = this.player.getPosition();
+    if (!pos) return;
+
+    const playerTeam = this.conquestMode.playerTeam;
+    const inSupply = this.vehicleSystem.getSupplyStations().some(
+      (s) => (s.team === TeamId.NEUTRAL || s.team === playerTeam) &&
+        Math.hypot(pos.x - s.position.x, pos.z - s.position.z) <= s.radius,
+    );
+    if (!inSupply) {
+      this.lastPlayerSupplyMessage = false;
+      return;
+    }
+
+    if (!this.lastPlayerSupplyMessage) {
+      this.hud.addKillMessage('弹药补给中...', this.simulationTimeMs);
+      this.lastPlayerSupplyMessage = true;
+    }
+
+    // 每 0.5 秒补充一次备用弹药（含手枪）
+    if (this.simulationTimeMs - this.lastPlayerSupplyTime >= 500) {
+      this.lastPlayerSupplyTime = this.simulationTimeMs;
+      for (const weapon of this.weaponSystem.getWeapons()) {
+        weapon.replenishReserveAmmo();
+      }
+    }
   }
 
   // ====== 联网载具（服务端权威：vehicle_state 驱动视觉与驾驶状态） ======
@@ -2466,6 +2549,8 @@ export class GameScene {
     this.audioSystem.play(SoundType.EXPLOSION, position);
     this.spawnExplosionEffect(position.clone());
     this.spawnSmokeEffect(position.clone(), Math.max(3, radius * 0.8));
+    // 阶段 10+ 扩展：爆炸残留烟柱（战场硝烟感）
+    this.spawnLingeringSmoke(position.clone(), radius);
 
     // Bot AoE
     for (const bot of this.aiSystem.bots) {
@@ -3512,6 +3597,8 @@ export class GameScene {
     } else {
       this.updateVehicleControl(dt);
       this.vehicleSystem.update(dt, this.simulationTimeMs);
+      // 阶段 10+ 扩展：步兵补给站弹药拾取（不在载具时）
+      this.updatePlayerSupplyPickup();
     }
     this.updateVehicleProjectiles(dt);
 
