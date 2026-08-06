@@ -17,7 +17,7 @@ export class ConnectionStatusOverlay {
       position: fixed; top: 0; left: 0; width: 100%; z-index: 200;
       display: none; flex-direction: column; align-items: center; gap: 10px;
       padding: 14px 20px; box-sizing: border-box;
-      font-family: 'Arial', sans-serif; font-size: 15px; text-align: center;
+      font-family: var(--ui-font); font-size: 15px; text-align: center;
       pointer-events: auto;
     `;
     this.statusEl = document.createElement('div');

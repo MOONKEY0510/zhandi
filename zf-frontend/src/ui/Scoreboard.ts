@@ -1,3 +1,5 @@
+import { applyThemeRoot, UI_THEME } from './theme';
+
 export interface PlayerScore {
   id: string;
   name: string;
@@ -25,6 +27,7 @@ export class Scoreboard {
   isVisible: boolean = false;
 
   constructor() {
+    applyThemeRoot();
     this.container = this.createScoreboard();
   }
 
@@ -44,7 +47,7 @@ export class Scoreboard {
       max-height: 400px;
       overflow-y: auto;
       z-index: 100;
-      font-family: 'Arial', sans-serif;
+      font-family: ${UI_THEME.fontFamily};
       color: white;
       display: none;
     `;

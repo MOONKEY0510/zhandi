@@ -27,7 +27,7 @@ export class SubtitleOverlay {
     this.textEl.style.cssText = `
       padding: 10px 22px; border-radius: 8px;
       background: rgba(0, 0, 0, 0.72); border: 1px solid rgba(255, 255, 255, 0.18);
-      color: #fff; font-family: 'Arial', sans-serif; font-size: 17px; font-weight: 600;
+      color: #fff; font-family: var(--ui-font); font-size: 17px; font-weight: 600;
       text-align: center; letter-spacing: 0.5px;
       opacity: 0; transition: opacity 220ms ease;
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);

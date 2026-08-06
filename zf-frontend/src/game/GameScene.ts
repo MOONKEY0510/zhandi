@@ -786,7 +786,7 @@ export class GameScene {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(150, 0, 0, 0.4); z-index: 200;
       display: none; align-items: center; justify-content: center;
-      pointer-events: none; font-family: 'Arial', sans-serif;
+      pointer-events: none; font-family: var(--ui-font);
     `;
     overlay.innerHTML = `
       <div style="text-align: center; color: white;">
@@ -805,7 +805,7 @@ export class GameScene {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0, 0, 0, 0.55); z-index: 210;
       display: none; align-items: center; justify-content: center;
-      pointer-events: none; font-family: 'Arial', sans-serif;
+      pointer-events: none; font-family: var(--ui-font);
     `;
     overlay.innerHTML = `
       <div style="text-align: center; color: white;">

@@ -1,4 +1,6 @@
 import { loadGameSettings, type GameSettings } from '../config';
+import { applyThemeRoot, UI_THEME } from './theme';
+import { FocusManager } from './focusManager';
 
 export class SettingsMenu {
   container: HTMLElement;
@@ -27,7 +29,10 @@ export class SettingsMenu {
   onApply: ((settings: GameSettings) => void) | null = null;
   onCancel: (() => void) | null = null;
 
+  private focusManager: FocusManager | null = null;
+
   constructor() {
+    applyThemeRoot();
     this.container = this.createSettingsMenu();
   }
 
@@ -65,6 +70,7 @@ export class SettingsMenu {
   show(): void {
     this.setSettings(loadGameSettings());
     this.container.style.display = 'flex';
+    this.focusManager?.focusFirst();
   }
 
   hide(): void {
@@ -72,6 +78,8 @@ export class SettingsMenu {
   }
 
   dispose(): void {
+    this.focusManager?.dispose();
+    this.focusManager = null;
     this.container.remove();
   }
 
@@ -81,10 +89,10 @@ export class SettingsMenu {
     container.style.cssText = `
       position: fixed; inset: 0; background: rgba(0, 0, 0, 0.8); display: none;
       align-items: center; justify-content: center; z-index: 1001;
-      font-family: Arial, sans-serif; color: white;
+      font-family: ${UI_THEME.fontFamily}; color: ${UI_THEME.colors.text};
     `;
     container.innerHTML = `
-      <div style="background:rgba(20,20,30,.95);padding:32px;border-radius:10px;width:420px;max-height:85vh;overflow:auto">
+      <div class="ui-panel" style="padding:${UI_THEME.spacing.lg};width:420px;max-height:85vh;overflow:auto">
         <h2 style="text-align:center;margin:0 0 24px">设置</h2>
         <h3 style="margin:0 0 12px;font-size:14px;color:#aaa">音量</h3>
         ${this.slider('volume-master', '主音量', 0, 100, 80)}
@@ -132,8 +140,8 @@ export class SettingsMenu {
           <input type="checkbox" id="show-subtitles" style="margin-top:8px">
         </label>
         <div style="display:flex;gap:10px">
-          <button id="apply-button" style="flex:1;padding:12px;background:#ffcc00;border:0;border-radius:5px;font-weight:bold;cursor:pointer">应用</button>
-          <button id="cancel-button" style="flex:1;padding:12px;background:transparent;border:2px solid #666;border-radius:5px;color:white;cursor:pointer">取消</button>
+          <button id="apply-button" class="ui-btn ui-btn-primary" style="flex:1;padding:12px">应用</button>
+          <button id="cancel-button" class="ui-btn ui-btn-ghost" style="flex:1;padding:12px">取消</button>
         </div>
       </div>
     `;
@@ -158,6 +166,7 @@ export class SettingsMenu {
 
     container.querySelector('#apply-button')?.addEventListener('click', () => this.onApply?.(this.readSettings()));
     container.querySelector('#cancel-button')?.addEventListener('click', () => this.onCancel?.());
+    this.focusManager = new FocusManager(container);
     this.setSettings(loadGameSettings());
     return container;
   }
