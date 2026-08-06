@@ -330,7 +330,6 @@ describe('服务端权威战斗闭环（阶段 8 第十七批：死亡/重生/�
     const shooter = shooterIsA ? a : b;
     const target = shooterIsA ? b : a;
     const targetId = shooterIsA ? ackB.playerId : ackA.playerId;
-    const targetTeam = shooterIsA ? ackB.team : ackA.team;
     const shooterTeam = shooterIsA ? ackA.team : ackB.team;
 
     const sx = spawnOf(shooterTeam).x; // -20

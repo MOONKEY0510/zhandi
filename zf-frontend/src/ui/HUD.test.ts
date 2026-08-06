@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { HUD, shouldRedrawMinimap, MINIMAP_REFRESH_MS } from './HUD';
+import { HUD } from './HUD';
 
 function baseData(overrides: Partial<Parameters<HUD['update']>[0]> = {}) {
   return {

@@ -1845,7 +1845,7 @@ export class GameScene {
   }
 
   /** 每帧：驾驶状态由服务端 driverId 驱动；在驾驶时路由输入 + 第三人称相机跟随 */
-  private updateNetworkVehicleControl(dt: number): void {
+  private updateNetworkVehicleControl(_dt: number): void {
     if (!this.networkGameClient || !this.networkVehicles || !this.player) return;
     const driving = this.networkVehicles.getByDriver(this.playerId);
     if (driving) {
