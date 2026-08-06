@@ -1020,6 +1020,8 @@ export class GameScene {
 
     this.inputManager.onScope(() => {
       this.toggleScope();
+      // 阶段 10+ 扩展：训练瞄具步骤（开镜成功即完成）
+      if (this.isScoped) this.handleTrainingProgress('scope');
     });
   }
 
@@ -1423,6 +1425,14 @@ export class GameScene {
       const dx = pos.x - TRAINING_LAYOUT.mobilityMarker.x;
       const dz = pos.z - TRAINING_LAYOUT.mobilityMarker.z;
       if (dx * dx + dz * dz < 2.5 * 2.5) this.handleTrainingProgress('mobility');
+    } else if (current.id === 'prone') {
+      // 状态类步骤：按 Z 进入匍匐即完成
+      if (this.player.isProneActive()) this.handleTrainingProgress('prone');
+    } else if (current.id === 'lean') {
+      // 状态类步骤：按住 Q/E 侧身即完成
+      if (this.inputManager.state.leanLeft || this.inputManager.state.leanRight) {
+        this.handleTrainingProgress('lean');
+      }
     }
   }
 
@@ -1760,26 +1770,29 @@ export class GameScene {
   private markSquadTarget(): void {
     if (this.healthSystem.isDead || this.inVehicle) return;
 
-    // 从屏幕中心射线检测
+    // 从屏幕中心射线检测（训练模式：靶子也纳入标记目标，当作假想敌）
     const dir = this.tmpVec2;
     this.camera.getWorldDirection(dir);
     const targets = [
       ...this.aiSystem.bots.map((b) => b.mesh),
+      ...(this.isTraining ? this.trainingTargets : []),
     ];
     const hit = this.raycast.cast(dir, 200, targets);
     if (!hit.hit || !hit.target) {
-      this.hud.addKillMessage('标记失败：未命中敌人', this.simulationTimeMs);
+      this.hud.addKillMessage('标记失败：未命中目标', this.simulationTimeMs);
       return;
     }
 
-    // 找到命中的 bot
-    const hitBot = this.aiSystem.bots.find((b) => b.mesh === hit.target);
-    if (!hitBot || hitBot.team === this.conquestMode.playerTeam) {
+    // 训练模式：标记靶子当作假想敌；对战模式：只能标记敌方 bot
+    const targetMesh = hit.target;
+    const hitTrainingTarget = this.trainingTargets.includes(targetMesh);
+    const hitBot = this.aiSystem.bots.find((b) => b.mesh === targetMesh);
+    if (!hitTrainingTarget && (!hitBot || hitBot.team === this.conquestMode.playerTeam)) {
       this.hud.addKillMessage('标记失败：目标为友方', this.simulationTimeMs);
       return;
     }
 
-    const pos = hitBot.mesh.position;
+    const pos = targetMesh.position;
     this.squadManager.setSquadMark(this.conquestMode.playerTeam, { x: pos.x, y: pos.y, z: pos.z }, 'player');
 
     // 通知所有同阵营 AI 集火标记位置
@@ -1795,6 +1808,8 @@ export class GameScene {
     this.squadMarkExpiresAt = this.simulationTimeMs + 10_000;
 
     this.hud.addKillMessage('小队标记：目标已标记，队员正在集火', this.simulationTimeMs);
+    // 阶段 10+ 扩展：训练小队标记步骤（标记靶子即完成）
+    if (hitTrainingTarget) this.handleTrainingProgress('mark');
   }
 
   private spawnSquadMarkerRing(targetPos: THREE.Vector3): void {
@@ -1863,6 +1878,8 @@ export class GameScene {
 
     this.artilleryCooldownUntil = this.simulationTimeMs + this.ARTILLERY_COOLDOWN;
     this.hud.addKillMessage('炮击已呼叫，弹幕即将落下...', this.simulationTimeMs);
+    // 阶段 10+ 扩展：训练炮击步骤
+    this.handleTrainingProgress('artillery');
   }
 
   private updateArtillery(currentTime: number): void {
@@ -1912,6 +1929,8 @@ export class GameScene {
     if (this.inVehicle) return;
     if (now - this.meleeCooldown < 500) return;
     this.meleeCooldown = now;
+    // 阶段 10+ 扩展：训练近战步骤
+    this.handleTrainingProgress('melee');
 
     const weapon = this.weaponSystem.getCurrentWeapon();
     const isSprinting = this.inputManager.state.sprint;

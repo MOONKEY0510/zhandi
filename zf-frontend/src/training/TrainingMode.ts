@@ -11,6 +11,12 @@ export type TrainingStepId =
   | 'reload'
   | 'weapon'
   | 'grenade'
+  | 'prone'
+  | 'lean'
+  | 'scope'
+  | 'melee'
+  | 'mark'
+  | 'artillery'
   | 'capture'
   | 'vehicle';
 
@@ -30,6 +36,12 @@ export const TRAINING_STEPS: TrainingStep[] = [
   { id: 'reload', title: '换弹', description: '按 R 换弹' },
   { id: 'weapon', title: '兵种装备', description: '按数字键 1-4 切换武器与装备（突击兵）' },
   { id: 'grenade', title: '投掷', description: '按 G 投掷手雷' },
+  { id: 'prone', title: '匍匐', description: '按 Z 匍匐，再按 Z 起立' },
+  { id: 'lean', title: '侧身', description: '按住 Q 或 E 侧身探身' },
+  { id: 'scope', title: '瞄具', description: '切到带瞄具的武器（1-4）后按 B 开镜' },
+  { id: 'melee', title: '近战', description: '按 V 近战攻击' },
+  { id: 'mark', title: '小队标记', description: '瞄准前方靶子按 M 标记（当作假想敌）' },
+  { id: 'artillery', title: '炮击', description: '按 H 呼叫炮击支援' },
   { id: 'capture', title: '占点', description: '站进训练据点，等待占领完成' },
   { id: 'vehicle', title: '载具', description: '靠近吉普按 E 进入载具' },
 ];

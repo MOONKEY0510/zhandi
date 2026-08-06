@@ -8,11 +8,11 @@ describe('TrainingMode（阶段 10 P1：新手训练场教程步骤管理）', (
     mode = new TrainingMode();
   });
 
-  it('初始状态：当前为第一步，未完成，进度 0/8', () => {
+  it('初始状态：当前为第一步，未完成，进度 0/14', () => {
     expect(mode.current?.id).toBe('move');
     expect(mode.isCompleted).toBe(false);
     expect(mode.progress).toEqual({ done: 0, total: TRAINING_STEPS.length });
-    expect(mode.steps.length).toBe(8);
+    expect(mode.steps.length).toBe(14);
   });
 
   it('顺序完成当前步骤后推进到下一步', () => {
@@ -41,7 +41,7 @@ describe('TrainingMode（阶段 10 P1：新手训练场教程步骤管理）', (
     }
     expect(mode.isCompleted).toBe(true);
     expect(mode.current).toBeNull();
-    expect(mode.progress.done).toBe(8);
+    expect(mode.progress.done).toBe(TRAINING_STEPS.length);
   });
 
   it('registerTargetHit 只在射击步骤计数，达到阈值完成射击', () => {
@@ -78,6 +78,19 @@ describe('TrainingMode（阶段 10 P1：新手训练场教程步骤管理）', (
   it('非射击步骤命中靶子不计数', () => {
     expect(mode.registerTargetHit()).toBe(false);
     expect(mode.targetHitsCount).toBe(0);
+  });
+
+  it('扩展步骤：匍匐/侧身/瞄具/近战/标记/炮击位于投掷之后、占点之前', () => {
+    for (const id of ['move', 'mobility', 'shoot', 'reload', 'weapon', 'grenade'] as TrainingStepId[]) {
+      expect(mode.completeStep(id)).toBe(true);
+    }
+    expect(mode.current?.id).toBe('prone');
+    const extra: TrainingStepId[] = ['prone', 'lean', 'scope', 'melee', 'mark', 'artillery'];
+    for (const id of extra) {
+      expect(mode.completeStep(id)).toBe(true);
+      expect(mode.completedIdsList).toContain(id);
+    }
+    expect(mode.current?.id).toBe('capture');
   });
 
   it('reset 复位全部状态', () => {
