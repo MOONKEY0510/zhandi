@@ -62,4 +62,31 @@ describe('ConquestMode', () => {
     expect(mode.isGameOver).toBe(true);
     expect(mode.winner).toBe(TeamId.ALLIES);
   });
+
+  it('阶段 10：占领完成触发 onControlPointCaptured（据点易主 → 字幕播报数据源）', () => {
+    const mode = new ConquestMode({ captureSpeed: 100 });
+    const listener = vi.fn();
+    mode.onControlPointCaptured = listener;
+    const point = mode.controlPoints[0];
+    expect(point.owner).not.toBe(TeamId.ALLIES);
+
+    mode.update(1, [{ position: point.position.clone(), team: TeamId.ALLIES }]);
+
+    expect(point.owner).toBe(TeamId.ALLIES);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(point.id, TeamId.ALLIES, point.name);
+  });
+
+  it('阶段 10：占领未完成不触发 onControlPointCaptured', () => {
+    const mode = new ConquestMode({ captureSpeed: 5 });
+    const listener = vi.fn();
+    mode.onControlPointCaptured = listener;
+    const point = mode.controlPoints[0];
+
+    // 单帧推进不足以完成占领
+    mode.update(0.5, [{ position: point.position.clone(), team: TeamId.AXIS }]);
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(point.owner).not.toBe(TeamId.AXIS);
+  });
 });

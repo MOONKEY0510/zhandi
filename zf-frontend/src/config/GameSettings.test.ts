@@ -20,6 +20,7 @@ describe('GameSettings', () => {
         crosshairStyle: 'dot',
         crosshairColor: '#00ff00',
         crosshairScale: 2.5,
+        showSubtitles: false,
       }),
     ).toEqual({
       volumeMaster: 100,
@@ -37,6 +38,7 @@ describe('GameSettings', () => {
       crosshairStyle: 'dot',
       crosshairColor: '#00ff00',
       crosshairScale: 2,
+      showSubtitles: false,
     });
   });
 
@@ -87,5 +89,14 @@ describe('GameSettings', () => {
     expect(sanitizeSettings({ crosshairColor: 'red' }).crosshairColor).toBe('#ffffff');
     expect(sanitizeSettings({ crosshairScale: 9 }).crosshairScale).toBe(2);
     expect(sanitizeSettings({ crosshairScale: 0.1 }).crosshairScale).toBe(0.5);
+  });
+
+  it('阶段 10：字幕开关默认开启，缺省补默认，显式 false 保留', () => {
+    expect(DEFAULT_GAME_SETTINGS.showSubtitles).toBe(true);
+    // 旧存档缺字段 → 默认开启
+    expect(sanitizeSettings({ volumeMaster: 50 }).showSubtitles).toBe(true);
+    expect(loadGameSettings({ getItem: () => JSON.stringify({ volumeMaster: 50 }) }).showSubtitles).toBe(true);
+    // 显式 false 保留（用户关闭字幕）
+    expect(sanitizeSettings({ showSubtitles: false }).showSubtitles).toBe(false);
   });
 });

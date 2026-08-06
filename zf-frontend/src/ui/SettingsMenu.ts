@@ -3,7 +3,7 @@ import { loadGameSettings, type GameSettings } from '../config';
 export class SettingsMenu {
   container: HTMLElement;
   private readonly elements: Record<
-    'volumeMaster' | 'volumeSfx' | 'volumeMusic' | 'volumeVoice' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics' | 'resolutionScale' | 'reduceScreenShake' | 'colorBlindMode' | 'crosshairStyle' | 'crosshairColor' | 'crosshairScale',
+    'volumeMaster' | 'volumeSfx' | 'volumeMusic' | 'volumeVoice' | 'sensitivity' | 'adsSensitivity' | 'fov' | 'invertY' | 'graphics' | 'resolutionScale' | 'reduceScreenShake' | 'colorBlindMode' | 'crosshairStyle' | 'crosshairColor' | 'crosshairScale' | 'showSubtitles',
     HTMLInputElement | HTMLSelectElement | null
   > = {
     volumeMaster: null,
@@ -21,6 +21,7 @@ export class SettingsMenu {
     crosshairStyle: null,
     crosshairColor: null,
     crosshairScale: null,
+    showSubtitles: null,
   };
 
   onApply: ((settings: GameSettings) => void) | null = null;
@@ -55,6 +56,9 @@ export class SettingsMenu {
     }
     if (this.elements.crosshairScale) {
       this.elements.crosshairScale.value = String(Math.round(settings.crosshairScale * 100));
+    }
+    if (this.elements.showSubtitles instanceof HTMLInputElement) {
+      this.elements.showSubtitles.checked = settings.showSubtitles;
     }
   }
 
@@ -124,6 +128,9 @@ export class SettingsMenu {
           <input type="color" id="crosshair-color" value="#ffffff" style="width:100%;margin-top:8px;height:36px;background:#2a2a2a;border:1px solid #555;border-radius:5px">
         </label>
         ${this.slider('crosshair-scale', '准星大小（%）', 50, 200, 100)}
+        <label style="display:block;margin-bottom:18px">显示字幕（关键音频信息的视觉替代）
+          <input type="checkbox" id="show-subtitles" style="margin-top:8px">
+        </label>
         <div style="display:flex;gap:10px">
           <button id="apply-button" style="flex:1;padding:12px;background:#ffcc00;border:0;border-radius:5px;font-weight:bold;cursor:pointer">应用</button>
           <button id="cancel-button" style="flex:1;padding:12px;background:transparent;border:2px solid #666;border-radius:5px;color:white;cursor:pointer">取消</button>
@@ -147,6 +154,7 @@ export class SettingsMenu {
     this.elements.crosshairStyle = container.querySelector('#crosshair-style');
     this.elements.crosshairColor = container.querySelector('#crosshair-color');
     this.elements.crosshairScale = container.querySelector('#crosshair-scale');
+    this.elements.showSubtitles = container.querySelector('#show-subtitles');
 
     container.querySelector('#apply-button')?.addEventListener('click', () => this.onApply?.(this.readSettings()));
     container.querySelector('#cancel-button')?.addEventListener('click', () => this.onCancel?.());
@@ -174,6 +182,8 @@ export class SettingsMenu {
         ? this.elements.crosshairColor.value
         : '#ffffff',
       crosshairScale: Number(this.elements.crosshairScale?.value ?? 100) / 100,
+      showSubtitles:
+        this.elements.showSubtitles instanceof HTMLInputElement && this.elements.showSubtitles.checked,
     };
   }
 

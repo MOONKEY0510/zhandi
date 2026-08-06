@@ -24,6 +24,8 @@ export interface GameSettings {
   crosshairColor: string;
   /** 可访问性：准星大小倍率 0.5-2 */
   crosshairScale: number;
+  /** 可访问性：显示字幕（关键音频信息的视觉替代，屏幕底部中央播报） */
+  showSubtitles: boolean;
 }
 
 export const DEFAULT_GAME_SETTINGS: Readonly<GameSettings> = {
@@ -42,6 +44,7 @@ export const DEFAULT_GAME_SETTINGS: Readonly<GameSettings> = {
   crosshairStyle: 'default',
   crosshairColor: '#ffffff',
   crosshairScale: 1,
+  showSubtitles: true,
 };
 
 const STORAGE_KEY = 'zhandi.game-settings.v2';
@@ -107,6 +110,7 @@ export function sanitizeSettings(settings: Partial<GameSettings>): GameSettings 
       ? (s.crosshairColor as string)
       : DEFAULT_GAME_SETTINGS.crosshairColor,
     crosshairScale: clamp(s.crosshairScale ?? DEFAULT_GAME_SETTINGS.crosshairScale, 0.5, 2),
+    showSubtitles: s.showSubtitles ?? DEFAULT_GAME_SETTINGS.showSubtitles,
   };
 }
 

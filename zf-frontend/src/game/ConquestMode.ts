@@ -71,6 +71,8 @@ export class ConquestMode {
   winner: TeamId | null = null;
   gameTime = 0;
   onTicketEvent: ((event: TicketEvent) => void) | null = null;
+  /** 阶段 10：据点易主回调（占领完成时触发；字幕播报的视觉替代数据源） */
+  onControlPointCaptured: ((pointId: string, owner: TeamId, name: string) => void) | null = null;
 
   constructor(config: Partial<ConquestConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -205,9 +207,11 @@ export class ConquestMode {
       if (capturingTeam === TeamId.ALLIES && point.captureProgress >= 100) {
         point.owner = TeamId.ALLIES;
         point.captureProgress = 100;
+        this.onControlPointCaptured?.(point.id, TeamId.ALLIES, point.name);
       } else if (capturingTeam === TeamId.AXIS && point.captureProgress <= -100) {
         point.owner = TeamId.AXIS;
         point.captureProgress = -100;
+        this.onControlPointCaptured?.(point.id, TeamId.AXIS, point.name);
       }
     } else {
       // 已占领，保持满进度

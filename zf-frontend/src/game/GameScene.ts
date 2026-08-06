@@ -17,6 +17,7 @@ import { MuzzleFlash } from '../weapons/MuzzleFlash';
 import { Raycast, calculateDamage } from '../weapons/Bullet';
 import { HUD } from '../ui/HUD';
 import { ConnectionStatusOverlay } from '../ui/ConnectionStatusOverlay';
+import { SubtitleOverlay } from '../ui/SubtitleOverlay';
 import { MainMenu } from '../ui/MainMenu';
 import { SettingsMenu, type GameSettings } from '../ui/SettingsMenu';
 import { Scoreboard } from '../ui/Scoreboard';
@@ -130,6 +131,8 @@ export class GameScene {
   private networkGameClient: NetworkGameClient | null = null;
   /** 阶段 10：断线/重连状态覆盖层（可恢复操作：重试/返回主菜单） */
   private connectionOverlay: ConnectionStatusOverlay | null = null;
+  /** 阶段 10：字幕覆盖层（关键音频信息的视觉替代；showSubtitles 开关） */
+  private subtitleOverlay!: SubtitleOverlay;
   /** 服务端权威游戏状态（收到 game_state 后非空；联网模式下驱动 HUD 兵力/据点显示） */
   private serverGameState: ServerGameState | null = null;
   /** 联网模式本人存活状态（服务端快照驱动；死亡表现/重生传送/输入门控用） */
@@ -364,6 +367,8 @@ export class GameScene {
   private setupGameEvents(): void {
     this.events.on('ui:message', ({ text, time }) => {
       this.hud?.addKillMessage(text, time);
+      // 阶段 10：关键播报消息同时走底部字幕（可访问性：关键音频信息视觉替代）
+      this.subtitleOverlay?.show(text);
     });
     this.events.on('combat:kill', ({ label, headshot, victimTeam, victimId, time }) => {
       this.killCount++;
@@ -391,6 +396,7 @@ export class GameScene {
     this.settingsMenu = new SettingsMenu();
     this.scoreboard = new Scoreboard();
     this.deploymentMenu = new DeploymentMenu();
+    this.subtitleOverlay = new SubtitleOverlay();
     this.deploymentMenu.onDeploy = (definition) => this.deployAs(definition);
 
     this.mainMenu.onPlay = () => {
@@ -488,6 +494,11 @@ export class GameScene {
     this.conquestMode = new ConquestMode();
     this.conquestMode.setPlayerTeam(TeamId.ALLIES); // 玩家默认苏军（蓝方）
     AIBot.playerTeam = TeamId.ALLIES; // 设置 AI 的玩家阵营
+    // 阶段 10：据点易主 → 字幕播报（关键音频信息的视觉替代）
+    this.conquestMode.onControlPointCaptured = (pointId, owner, name) => {
+      const teamName = owner === TeamId.AXIS ? '德军' : '苏军';
+      this.subtitleOverlay?.show(`「${name}」被${teamName}占领`, 3500);
+    };
 
     this.setupSpawnPoints();
 
@@ -764,6 +775,8 @@ export class GameScene {
       crosshairColor: savedSettings.crosshairColor,
       crosshairScale: savedSettings.crosshairScale,
     });
+    // 阶段 10：可访问性——字幕开关（关键音频信息视觉替代）
+    this.subtitleOverlay?.setEnabled(savedSettings.showSubtitles);
   }
 
   private setupDeathOverlay(): void {
@@ -2943,6 +2956,7 @@ export class GameScene {
     cancelAnimationFrame(this.animationId);
     this.connectionOverlay?.dispose();
     this.connectionOverlay = null;
+    this.subtitleOverlay?.dispose();
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.inputManager.dispose();
